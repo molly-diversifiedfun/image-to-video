@@ -31,6 +31,11 @@ The number at the end is the length in HOURS (3 = 3 hours; 0.5 = 30 min;
   *** FOLDER of photos → each becomes its own video ***
      bash "<make-video>" "<image folder>" 3
 
+  *** FOLDER of photos → ONE slideshow (each photo fades into the next) ***
+     bash "<make-video>" "<image folder>" --slideshow --each 1 --out "<out.mp4>"
+     ( --each 1 = hold each photo 1 hour. 10 photos = a ~10-hour video.
+       Add --shuffle to randomize the order. )
+
   *** VIDEO CLIP → stretched to hours, seamless loop ***
      bash "<make-video>" "<a short clip>" 8 --loop pingpong
 

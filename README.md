@@ -33,6 +33,9 @@ The tool finds ffmpeg/ffprobe automatically: it prefers a copy bundled in `bin/`
 # A short video clip → stretched to 8h with a truly-seamless loop
 ./make-video clip.mov 8 --loop pingpong
 
+# A folder of images → ONE long video, each image holds then dissolves into the next
+./make-video ./images --slideshow --each 1 --out slideshow.mp4
+
 # Add a soundtrack to any of the above (file loops; folder = crossfaded playlist)
 ./make-video photo.tiff 2 --audio song.m4a
 ./make-video photo.tiff 2 --audio ./songs/
@@ -51,6 +54,10 @@ The tool auto-detects the input: a **photo** → still mode; a **video clip** �
 |------|--------|
 | `--audio PATH` | Add a soundtrack. A **file** loops seamlessly; a **folder** becomes a crossfaded, loudness-matched playlist. Fills the full length; video stream stays copied. On a **video clip**, the music **replaces** the clip's native sound by default. |
 | `--keep-native` | Layer the `--audio` music **over** a video clip's native sound instead of replacing it (mixed via `amix`). Requires `--audio`; ignored if the clip has no audio track. |
+| `--slideshow` | Turn a **folder of images** into ONE long video: each image holds, then crossfades into the next. Requires a directory input + `--out FILE`. Without it, a folder is batched (one video per image). |
+| `--each HOURS` | Slideshow: per-image hold time (alias for the positional `HOURS`). Total length = (images × each) − (n−1)×xfade. |
+| `--shuffle` | Slideshow: randomize image order (`--seed N` for a repeatable shuffle). Default order is sorted by filename. |
+| `--fill` | Slideshow: crop mixed-aspect images to fill the frame instead of letterboxing (the default fits + pads). |
 | `--loop MODE` | Video-clip looping: `pingpong` (truly seamless, reverses motion), `crossfade` (default; hides the flash, not fully seamless), `native` (source already loops). |
 | `--xfade SECS` | Crossfade/seam duration (default 1.0s clips, used by `--loop crossfade`). |
 | `--yes` | Skip the loop-extend seam preview and render immediately (for scripts/batch). |
