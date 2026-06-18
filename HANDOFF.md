@@ -1,7 +1,8 @@
 # HANDOFF — make-video build (audio + transitions)
 
 **Date:** 2026-06-18
-**Branch:** `feat/audio-and-transitions` (pushed to origin through `44479b5`)
+**Branch:** `feat/audio-and-transitions` (pushed to origin through `9e1d79a`)
+**Milestone:** PRD-5 (photo + audio) COMPLETE and real-smoked — first usable feature.
 **Method:** subagent-driven development (implementer → spec review → code-quality review → fix loop), per `docs/plans/2026-06-18-make-video-implementation.md`.
 
 ## Goal
@@ -13,7 +14,10 @@ Extend the existing bash `make-video` (still→long silent video) into a unified
 - **Task 3** — `lib/mux.sh::mux_audio VIDEO AUDIO OUT` — `-c:v copy` (proven), AAC `-b:a 192k`, audio REPLACE via explicit `-map`. CALLER CONTRACT: AUDIO must be pre-fit to video length (`-shortest` truncates otherwise).
 - **Task 4** — `lib/audio.sh::audio_build SRC TARGET_SECS OUT` (single-file branch): trims if long, click-free `acrossfade` self-seamless loop if short, `loudnorm` I=-16. Dir branch is a stub returning non-zero. Review caught TWO real bugs: (1) seam test was toothless (peak-over-200ms can't see a click) → rewritten to RMS-delta in a 1ms window WITH a negative-control test that proves a hard loop FAILS; (2) sample-rate hardcoded 44100 broke 48 kHz sources → now queries actual sample rate.
 
-All committed; `bats tests/` = **53/53 green**. Run: `export PATH="/opt/homebrew/bin:$PATH"; bats tests/`.
+- **Task 5** — `lib/audio.sh` folder branch: `audio_build DIR …` → crossfaded, per-track-loudness-normalized playlist (sorted or `--shuffle --seed N`), looped to fill, exact duration. Teeth-tested (40 LUFS raw disparity would fail; per-track loudnorm → 0.92 LUFS).
+- **PRD-5 (Tasks 7–8)** — `--audio PATH` wired into `make-video` still mode (single file → loop; folder → playlist). Video stream stays `-c:v copy` (static path) or muxes onto the zoom re-encode. No-`--audio` path is byte-for-byte unchanged (regression-tested). Real-smoked on the actual 4K fine-art TIFF + audio → h264+aac, exact duration. Temp-dir cleanup guaranteed on all exit paths (RETURN traps don't fire under `set -e` script-exit, so explicit `|| { cleanup; return 1; }`).
+
+All committed; `bats tests/` = **68/68 green**. Run: `export PATH="/opt/homebrew/bin:$PATH"; bats tests/`.
 
 ## Key decisions / lessons
 - **Seam strategy is evidence-based** (red-team, architecture §3.2): crossfade hides the flash but leaves a content jump (28.6 dB); pingpong is truly seamless (≈baseline) but reverses motion; loop-native source is the third option. `--loop {crossfade|pingpong|native}`.
@@ -21,11 +25,12 @@ All committed; `bats tests/` = **53/53 green**. Run: `export PATH="/opt/homebrew
 - PRD-4 (multi-clip mixer) is gated to ship LAST (slow full re-encode).
 
 ## Remaining (resume here)
-Per implementation plan, next is **Task 5** then 6 → 7–8, then Phases 3–6.
-- **Task 5** — `lib/audio.sh` folder branch: `audio_build DIR …` → crossfaded, loudness-normalized playlist (sorted or `--shuffle`), looped to fill TARGET_SECS. Replace the dir stub. Needs a teeth-y test (gap/click at track joins) + a negative control.
-- **Task 6** — `lib/seam.sh::seam_check` (promote the harness PSNR/RMS logic into a runtime engine for the preview gate).
-- **Tasks 7–8** — wire `--audio` (file + folder) into `make-video` still mode = **PRD-5 (photo+audio)**; regression-guard the no-audio path; `--zoom` + audio coexist. Then real smoke on actual sample media.
-- **Phases 3–6** (outlined in the plan): PRD-2 loop-extend + `--loop` + preview gate; PRD-3; PRD-1 slideshow; PRD-4 mixer (last). Expand into bite-sized tasks after Phase 2 ships and the seam strategy is validated on the operator's real clips.
+Phases 0–2 DONE (shared core + PRD-5). Next is `seam_check`, then Phase 3.
+- **`seam_check`** — `lib/seam.sh`: promote the harness PSNR/RMS logic into a runtime engine for the Phase-3 preview gate (only needed once loop-extend starts; deferred past PRD-5 deliberately).
+- **Phase 3 — PRD-2 (loop-extend)**: `loop_unit --loop {crossfade|pingpong|native}` (encode unit once → concat-copy); wire `seam_check` + the PREVIEW go/no-go gate (architecture §4); clip-native seam crossfade or pingpong reverse-concat; `--audio` replace/layer. GATE: validate §3.2 numbers on the operator's REAL clips before Phase 4.
+- **Phase 4 — PRD-3** (clip + soundtrack): Phase 3 video + `audio_build` replace-by-default; `--keep-native` to layer.
+- **Phase 5 — PRD-1** (slideshow): `xfade_join` chain over per-image still segments.
+- **Phase 6 — PRD-4** (multi-clip mixer): ships LAST (slow full re-encode + mandatory preview).
 
 ## Resume instructions
 1. `cd ~/github/ImageToVideo && git checkout feat/audio-and-transitions && git pull`
