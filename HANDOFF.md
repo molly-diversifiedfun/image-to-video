@@ -1,8 +1,10 @@
 # HANDOFF — make-video build (audio + transitions)
 
 **Date:** 2026-06-18
-**Branch:** `feat/audio-and-transitions` (pushed to origin through `67988ae`)
-**Milestones:** PRD-5 (photo + audio) AND PRD-2 (seamless loop-extend) COMPLETE + real-smoked. 98/98 tests.
+**Branch:** `feat/prd-3-keep-native` (pushed; not yet merged to main). Prior work merged to main at `5f8a800`.
+**Milestones:** PRD-5 (photo+audio), PRD-2 (seamless loop-extend), AND PRD-3 (clip+soundtrack) COMPLETE. **3 of 5 shipped.** 101/101 tests.
+
+> **PRD-3 (2026-06-18):** Default `--audio`-replaces-native was already done in PRD-2. The only delta added was `--keep-native` — layer the music bed OVER a clip's native sound via `mux_audio_layer` (ffmpeg `amix`). New teeth tests: bandpass-RMS tone helpers (`assert_tone_present/absent`, -35 dB threshold) + negative controls (replace strips native → 220 Hz absent; layer keeps both 220+880 Hz). Branch pushed; **merge to main when ready.** Real-smoke on actual drone footage still blocked on the unmounted SSD (same as the drive sync).
 **Method:** subagent-driven development (implementer → spec review → code-quality review → fix loop), per `docs/plans/2026-06-18-make-video-implementation.md`.
 
 ## Goal
