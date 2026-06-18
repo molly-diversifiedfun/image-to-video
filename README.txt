@@ -1,9 +1,9 @@
 ================================================================
-  ImageToVideo — turn a still image into a long silent video
+  make-video — turn a photo OR a video clip into a long video
 ================================================================
 
-Makes an MP4 of any length from a photo. No sound. Great for screens,
-displays, and YouTube. Point it at one image or a whole folder.
+Makes an MP4 of any length from a photo or a short video clip.
+Optionally adds music/sound. Great for screens, displays, and YouTube.
 
 ----------------------------------------------------------------
 SETUP
@@ -17,51 +17,59 @@ Intel Mac it won't run; ask Molly for the Intel version.)
 ----------------------------------------------------------------
 HOW TO USE IT
 ----------------------------------------------------------------
-In Terminal, type the command below, then a SPACE, then DRAG the script
-file (make-video) or the folder/image into the window so its path fills in.
+In Terminal, type the command, then a SPACE, then DRAG the script
+(make-video) and your image/clip/folder into the window so the paths fill in.
+The number at the end is the length in HOURS (3 = 3 hours; 0.5 = 30 min;
+0.02 ≈ 1 minute for a quick test). Output appears next to the source.
 
-  *** Whole folder, every image becomes a 3-hour video: ***
+  *** PHOTO → long video ***
+     bash "<make-video>" "<a photo>" 3
 
-     bash "<drag make-video here>" "<drag your image folder here>" 3
+  *** FOLDER of photos → each becomes its own video ***
+     bash "<make-video>" "<image folder>" 3
 
-  *** Just one image, 3-hour video: ***
-
-     bash "<drag make-video here>" "<drag one image here>" 3
-
-The number at the end is the length in HOURS (3 = 3 hours).
-Fractions work too: 0.5 = 30 minutes, 0.0167 = about 1 minute (good for a test).
-
-The finished .mp4 files appear right next to the original images.
+  *** VIDEO CLIP → stretched to hours, seamless loop ***
+     bash "<make-video>" "<a short clip>" 8 --loop pingpong
 
 ----------------------------------------------------------------
-OPTIONS (add to the end of the command)
+ADD MUSIC / SOUND  (works on any of the above)
 ----------------------------------------------------------------
-  --zoom 4        Add a very slow, subtle zoom over the whole video.
-                  (4 = 4%. Looks "alive" but barely noticeable.)
-                  NOTE: this re-encodes every frame, so it is SLOW —
-                  a 3-hour file takes ~1.5-2 hours instead of ~90 seconds.
+  --audio "<one song>"      loops that song smoothly for the whole length
+  --audio "<a song folder>" plays the songs back-to-back (a seamless
+                            playlist), volume-matched, looped to fill
 
-  --out "/some/folder"   Put the .mp4 files in a specific folder instead
-                         of next to the images.
+Example — a photo for 2 hours with a song:
+     bash "<make-video>" "<a photo>" 2 --audio "<a song>"
 
-  --jobs 4        How many to render at once. Leave it out — the tool
-                  picks a good number for your Mac automatically.
+----------------------------------------------------------------
+STRETCHING A VIDEO CLIP (the loop)  — important
+----------------------------------------------------------------
+  --loop pingpong   TRULY seamless — plays forward then backward so the
+                    join is invisible. Best for water/clouds/fog/abstract.
+                    (It reverses motion on the way back, so a clip that
+                    moves in one direction — e.g. a drone flying forward —
+                    will look like it rewinds. Use crossfade for those.)
+  --loop crossfade  (default) gently blends the loop point. Hides the
+                    "jump" but isn't perfectly invisible on moving footage.
 
-Example: a folder of images, 3-hour videos, with the subtle zoom:
+Before it makes the full long file, it shows you a short PREVIEW of the
+loop point and tells you how seamless it is — so you can stop and switch
+to --loop pingpong if you don't like it. (Add --yes to skip the preview.)
 
-     bash "<drag make-video here>" "<drag folder here>" 3 --zoom 4
+----------------------------------------------------------------
+OPTIONS
+----------------------------------------------------------------
+  --zoom 4     subtle slow zoom on a PHOTO (SLOW: re-encodes every frame).
+  --out "<folder>"   put the .mp4s in a specific folder.
+  --jobs 4     how many to render at once (auto if omitted).
+  --yes        skip the loop preview and just render.
 
 ----------------------------------------------------------------
 GOOD TO KNOW
 ----------------------------------------------------------------
-- No zoom = FAST. A 3-hour 4K video is ready in about 90 seconds and is
-  a few gigabytes. With --zoom it is much slower and the files are bigger
-  (~34 GB for a 3-hour 4K file at high quality).
-
-- Output is 4K, 30 fps, no audio, standard MP4 — uploads straight to YouTube.
-
-- It skips anything that is not an image, and ignores the hidden "._" files
-  macOS sometimes leaves on drives.
-
-- See every option with:   bash "<drag make-video here>" --help
+- Photos with no zoom are FAST (a 3-hour 4K file in ~90 seconds).
+  --zoom and video-clip looping take longer (they re-encode).
+- Output is 4K, 30 fps, standard MP4 — uploads straight to YouTube.
+- Skips non-media files and the hidden "._" files macOS leaves on drives.
+- See every option with:   bash "<make-video>" --help
 ================================================================
