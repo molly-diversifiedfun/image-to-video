@@ -46,6 +46,30 @@ Alternatives: `brew install ffmpeg`, or drop your own static `ffmpeg`/`ffprobe` 
 
 4K-native H.264 `.mp4`, 30 fps, **no audio**, `yuv420p`, even dimensions, `+faststart` — uploads straight to YouTube. Static mode ≈ a few GB for 3h; `--zoom` at high quality ≈ ~34 GB for a 3h 4K file.
 
+## Development / tests
+
+Tests use [bats-core](https://github.com/bats-core/bats-core).
+
+```bash
+brew install bats-core      # one-time, dev machine only
+bats tests/                 # run all tests
+```
+
+### Harness layout
+
+```
+tests/
+  helpers/
+    fixtures.sh   # mk_image / mk_clip / mk_audio — generate tiny media via ffmpeg
+    assert.sh     # assert_duration / assert_has_stream / assert_seam_ok
+  smoke.bats      # proves the harness works end-to-end
+lib/              # sourceable bash function files (e.g. lib/audio.sh)
+```
+
+`fixtures.sh` mirrors the same ffmpeg resolution logic as the main script: prefers `./bin/ffmpeg` + `./bin/ffprobe` if present, falls back to PATH.
+
+`assert_seam_ok FILE FRAME` extracts a boundary frame pair and a mid-clip baseline pair, computes PSNR for each, and fails only if the boundary PSNR drops more than 8 dB below baseline — enough to catch hard cuts and flash frames while tolerating smooth gradient motion.
+
 ## Behavior notes
 
 - Skips non-images and macOS `._` AppleDouble junk automatically.
