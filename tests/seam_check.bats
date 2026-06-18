@@ -312,3 +312,32 @@ _frame_count() {
   [ "$status" -ne 0 ]
   [ -n "$stderr" ]
 }
+
+# ---------------------------------------------------------------------------
+# Test 9: FRAME=1 (too close to clip start — baseline pair overlaps boundary)
+#
+# Root cause of the false-pass: with FRAME=1,
+#   boundary pair  = (frame-1, frame) = (0, 1)
+#   baseline_a     = frame-1-10 = -10, clamped to 0
+#   baseline pair  = (0, 1)  ← SAME as boundary pair
+#   drop = baseline_psnr - boundary_psnr = 0  → always SEAMLESS
+#
+# This makes FRAME=1 meaningless — every video, even a hard cut at frame 1,
+# would report SEAMLESS.  The preview gate must never receive that verdict.
+#
+# Fix: require FRAME >= 12 so baseline_a = FRAME-11 >= 1, keeping the
+# baseline pair strictly before and non-overlapping with the boundary pair.
+# Frames 1–11 return non-zero + stderr "frame too close to clip start".
+# ---------------------------------------------------------------------------
+
+@test "seam_check: FRAME=1 (baseline overlaps boundary, degenerate) → non-zero exit + stderr, NOT SEAMLESS" {
+  local clip="$WORK_DIR/clip.mp4"
+
+  mk_clip "$clip" 220 3
+
+  run --separate-stderr seam_check "$clip" 1
+  [ "$status" -ne 0 ]
+  [ -n "$stderr" ]
+  # Must NOT print SEAMLESS — that verdict is meaningless here
+  [[ "$output" != *"SEAMLESS"* ]]
+}

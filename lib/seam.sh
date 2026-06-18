@@ -154,17 +154,34 @@ seam_check() {
   fi
 
   # ------------------------------------------------------------------
+  # Guard: require sufficient lead-in for a distinct local baseline.
+  #
+  # Baseline pair = (frame-11, frame-10); boundary pair = (frame-1, frame).
+  # When FRAME < 12, baseline_a = frame-1-10 clamps to 0, making the
+  # baseline pair (0,1) — identical to the boundary pair when FRAME=1.
+  # drop = 0 in that case, so the verdict is always SEAMLESS regardless
+  # of the actual content.  That false SEAMLESS would fool the preview gate.
+  #
+  # Minimum FRAME = 12 guarantees baseline_a = frame-11 >= 1, keeping the
+  # baseline pair strictly before and non-overlapping with the boundary.
+  # ------------------------------------------------------------------
+  if [[ "$frame" -lt 12 ]]; then
+    echo "seam_check: FRAME=${frame} is too close to the clip start to measure a distinct baseline (minimum FRAME=12)" >&2
+    return 1
+  fi
+
+  # ------------------------------------------------------------------
   # Compute 0-based frame indices
   #
   # boundary pair : (frame-1, frame)   [0-based: (frame-1, frame)]
-  # baseline pair : (frame-11, frame-10) clamped so that frame-11 >= 0
+  # baseline pair : (frame-11, frame-10) — always distinct from boundary
   # ------------------------------------------------------------------
   local boundary_a=$(( frame - 1 ))
   local boundary_b=$(( frame ))
 
-  # Baseline anchor: 10 frames before boundary_a
+  # Baseline anchor: 10 frames before boundary_a.
+  # The FRAME >= 12 guard above ensures baseline_a >= 1, so no clamping needed.
   local baseline_a=$(( boundary_a - 10 ))
-  [[ $baseline_a -ge 0 ]] || baseline_a=0
   local baseline_b=$(( baseline_a + 1 ))
 
   # ------------------------------------------------------------------
