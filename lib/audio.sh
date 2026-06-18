@@ -148,9 +148,11 @@ audio_build() {
     # measure its exact sample count for aloop's size= parameter.
     local unit_wav
     unit_wav="$(mktemp -p "$WORK_DIR" 2>/dev/null || mktemp)"
-    # Ensure the temp file ends with .wav for ffmpeg format detection
+    # Ensure the temp file ends with .wav for ffmpeg format detection.
+    # On cross-device temp dirs mv fails; clean up the original before reassigning
+    # to avoid leaking a stale file without the .wav suffix.
     local unit_wav_path="${unit_wav}.wav"
-    mv "$unit_wav" "$unit_wav_path" 2>/dev/null || unit_wav_path="${unit_wav}.wav"
+    mv "$unit_wav" "$unit_wav_path" 2>/dev/null || { unit_wav_path="${unit_wav}.wav"; rm -f "$unit_wav"; }
 
     "$FFMPEG" \
       -nostdin -loglevel error -y \
@@ -171,7 +173,11 @@ audio_build() {
         return 1
       }
 
-    # Step 2: get exact sample count of the unit (PCM: exact by construction)
+    # Step 2: get exact sample count of the unit (PCM: exact by construction).
+    # We derive sample count as duration * actual_sample_rate so the calculation
+    # is correct for any source sample rate (44100, 48000, etc.).  Using a
+    # hardcoded 44100 would misplace the aloop boundary for 48 kHz sources,
+    # causing the loop to cut in the middle of the crossfade and produce a click.
     local unit_dur
     unit_dur="$(_audio_get_duration "$unit_wav_path")" || {
       rm -f "$unit_wav_path"
@@ -179,9 +185,19 @@ audio_build() {
       return 1
     }
 
+    local unit_sr
+    unit_sr="$("$FFPROBE" \
+      -v error \
+      -select_streams a:0 \
+      -show_entries stream=sample_rate \
+      -of default=noprint_wrappers=1:nokey=1 \
+      "$unit_wav_path")"
+    # Fall back to 44100 only if ffprobe can't read the sample rate (shouldn't happen for PCM)
+    [[ "$unit_sr" =~ ^[0-9]+$ ]] || unit_sr=44100
+
     local unit_samps
-    unit_samps="$(awk -v d="$unit_dur" \
-      'BEGIN { printf "%d", d * 44100 + 0.5 }')"
+    unit_samps="$(awk -v d="$unit_dur" -v sr="$unit_sr" \
+      'BEGIN { printf "%d", d * sr + 0.5 }')"
 
     # Step 3: compute loop count — enough to exceed TARGET_SECS
     local loops

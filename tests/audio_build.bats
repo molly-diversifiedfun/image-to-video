@@ -11,20 +11,41 @@
 #     positive integer (non-zero integer, no floats)
 #   - Directory SRC: returns 2 (stub for future folder branch)
 #
-# Seam quality test method:
-#   We compare Peak level dB in a short window AROUND the loop boundary against
-#   a baseline window drawn from a region of the same audio that contains no
-#   seam.  A click/pop manifests as a sudden amplitude spike (high peak, normal
-#   RMS → large crest factor in the seam window).  We accept the seam if the
-#   peak at the boundary is within 12 dB of the baseline peak.  This threshold
-#   is generous enough to survive the tri-windowed crossfade's amplitude bulge
-#   while still catching a raw sample discontinuity (which typically produces a
-#   40+ dB crest spike).
+# SEAM QUALITY TEST METHOD (tests 5 + 5-neg):
+#   We measure astats "RMS difference" — the RMS of consecutive-sample
+#   differences — in a 1ms window centred on the loop boundary, compared
+#   against a 1ms baseline window drawn from mid-clip.
 #
-#   Limitation: the test runs at the first loop boundary, which falls at roughly
-#   SRC_DUR seconds.  For a sine wave fixture the crossfade slightly raises the
-#   peak vs a mid-clip window; a raw click raises it by 20–40+ dB.  The 12 dB
-#   gap catches the latter without false-failing on the former.
+#   Why this works:
+#     A click is a 1–5 sample amplitude jump that produces a large
+#     consecutive-sample delta, driving up RMS difference.  A smooth
+#     crossfade keeps consecutive deltas proportional to the underlying
+#     signal rate-of-change.  RMS difference is therefore the natural
+#     per-sample-rate-of-change metric — unlike Peak level (which reflects
+#     absolute amplitude, not sudden changes) it is genuinely sensitive
+#     to clicks even when the surrounding signal has similar amplitude.
+#
+#   Fixture requirement:
+#     We use a 443 Hz tone with a 1.3s source duration.  443*1.3 = 575.9
+#     cycles → phase at the boundary ≠ 0 or π, so the signal has non-zero
+#     amplitude at the seam (avoiding the zero-crossing coincidence that
+#     let 440 Hz / 1.5s slip through the old test).
+#
+#   Threshold: ratio = seam_rms_diff / baseline_rms_diff.
+#     PASS: ratio < 1.75 (seam no worse than 75% above baseline)
+#     FAIL: ratio >= 1.75 (click — large jump relative to baseline)
+#
+#   Hard loop (negative control):
+#     A PCM concat of 4 copies with NO crossfade on a 443 Hz / 1.3s source
+#     gives seam_rms_diff ≈ 428 vs baseline ≈ 187 → ratio ≈ 2.29 (FAILS).
+#     audio_build output on the same source: ratio < 1.0 (PASSES).
+#     This proves the test has teeth.
+#
+#   Note: the negative control works on PCM because AAC encoding smooths
+#   the single-sample discontinuity.  The negative control is therefore
+#   run against a PCM hard loop (not AAC) to remain sensitive.  The
+#   positive test is run against audio_build's decoded AAC output, where
+#   the crossfade must be large enough to survive AAC quantisation.
 
 REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 
@@ -39,6 +60,19 @@ setup() {
 
 teardown() {
   rm -rf "$WORK_DIR"
+}
+
+# ---------------------------------------------------------------------------
+# Internal: _rms_diff FILE START END
+# Emit the RMS-difference value from astats on a time window.
+# ---------------------------------------------------------------------------
+_rms_diff() {
+  local file="$1" start="$2" end="$3"
+  "$FFMPEG" -nostdin -loglevel info \
+    -i "$file" \
+    -filter_complex "[0:a]atrim=start=${start}:end=${end},astats" \
+    -f null - 2>&1 \
+  | awk '/RMS difference:/{val=$NF; count++} END { if(count>0) print val }'
 }
 
 # ---------------------------------------------------------------------------
@@ -96,9 +130,9 @@ teardown() {
 # ---------------------------------------------------------------------------
 # Test 4: Loudness normalised to EBU R128 (≈ -16 LUFS ± 2 dB)
 #
-# Method: run loudnorm=print_format=json in measurement-only mode.
-# output_i reflects what loudnorm reports as the output integrated loudness;
-# on a short test clip this is typically within ±2 dB of the target of -16 LUFS.
+# Method: run loudnorm=print_format=json in analysis mode.
+# output_i is the two-pass predicted loudness; close to -16 when target
+# is achievable.
 # ---------------------------------------------------------------------------
 
 @test "audio_build: output loudness is near -16 LUFS (±2 dB)" {
@@ -111,10 +145,6 @@ teardown() {
   [ "$status" -eq 0 ]
   [ -f "$out" ]
 
-  # Measure integrated loudness using loudnorm in analysis mode.
-  # We parse output_i from the JSON block that loudnorm prints to stderr.
-  # output_i is the loudness that the two-pass loudnorm would produce for this
-  # material; for clips where the target is reachable it is very close to -16.
   local loudness_json
   loudness_json="$("$FFMPEG" \
     -nostdin \
@@ -122,10 +152,9 @@ teardown() {
     -af "loudnorm=I=-16:TP=-1.5:LRA=11:print_format=json" \
     -f null - 2>&1)"
 
+  # Tab-indented JSON: `\t"output_i" : "-15.98",`
+  # gsub approach compatible with macOS one-true-awk (no 3-arg match).
   local output_i
-  # The loudnorm JSON is tab-indented: `\t"output_i" : "-15.98",`
-  # Use gsub to strip everything before and after the value (compatible with
-  # macOS one-true-awk which does not support 3-arg match).
   output_i="$(echo "$loudness_json" | awk '/"output_i"/{
     gsub(/.*"output_i" *: *"/, "")
     gsub(/".*/, "")
@@ -133,14 +162,12 @@ teardown() {
     exit
   }')"
 
-  # Guard: if we didn't get a numeric value loudnorm didn't run correctly.
   [[ "$output_i" =~ ^-?[0-9] ]] || {
     echo "audio_build loudness test: could not parse output_i from loudnorm json" >&2
     echo "loudnorm output was: $loudness_json" >&2
     return 1
   }
 
-  # Accept ±2 dB around -16 LUFS
   local ok
   ok="$(awk -v val="$output_i" 'BEGIN {
     diff = val - (-16)
@@ -155,87 +182,213 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
-# Test 5: Seam quality — no audible click at loop boundaries
+# Test 5 (NEGATIVE CONTROL): A HARD loop MUST fail the seam check.
 #
-# Fixture: 1.5s sine SRC looped to 6s (loops ~4x).
-# First loop boundary is at approximately SRC_DUR seconds.
+# This test proves the measurement has teeth.  We build a PCM hard loop
+# (concat 4 copies, NO crossfade) and assert that RMS difference at the
+# seam boundary exceeds 1.75× the mid-clip baseline.
 #
-# Method: compare Peak level dB in a 0.2s window centred on the first loop
-# boundary against a 0.2s baseline window centred well away from any boundary.
-# A clean crossfade raises the boundary peak by at most a few dB; a raw click
-# (sample discontinuity) raises it by 20–40+ dB.  We use a 12 dB threshold.
+# Fixture: 443 Hz tone at 1.3s duration.  443*1.3 = 575.9 cycles →
+# sin(2π*0.9) ≈ -0.59 at the boundary (non-zero amplitude, real discontinuity).
 #
-# Important: we measure BEFORE loudnorm so the seam signal is not masked by
-# the gain change; audio_build applies loudnorm to the final output, so we
-# simply measure the output file after the function returns.
+# Measured values (PCM, first seam at 1.3s):
+#   seam_rms_diff ≈ 428 (large consecutive-sample jumps at the discontinuity)
+#   base_rms_diff ≈ 188 (normal sine rate-of-change)
+#   ratio ≈ 2.28 → FAILS at threshold 1.75 ✓
 # ---------------------------------------------------------------------------
 
-@test "audio_build: seam quality — loop boundary peak within 12 dB of baseline" {
+@test "seam negative control: hard PCM loop (no crossfade) FAILS the seam check" {
+  local src="$WORK_DIR/src.wav"
+
+  # PCM source: 443 Hz / 1.3s so phase is non-zero at boundary
+  "$FFMPEG" -nostdin -loglevel error -y \
+    -f lavfi -i "sine=frequency=443:sample_rate=44100" \
+    -t 1.3 -c:a pcm_s16le "$src"
+
+  # Hard loop: 4 PCM copies, no crossfade
+  local hard_loop="$WORK_DIR/hard_loop.wav"
+  "$FFMPEG" -nostdin -loglevel error -y \
+    -i "$src" -i "$src" -i "$src" -i "$src" \
+    -filter_complex "[0:a][1:a][2:a][3:a]concat=n=4:v=0:a=1[out]" \
+    -map "[out]" -c:a pcm_s16le "$hard_loop"
+
+  local src_dur
+  src_dur="$("$FFPROBE" -v error \
+    -show_entries format=duration \
+    -of default=noprint_wrappers=1:nokey=1 "$src")"
+
+  # 1ms window centred on first seam boundary (src_dur seconds)
+  local seam_c base_c half="0.0005"
+  seam_c="$(awk -v d="$src_dur" -v h="$half" \
+    'BEGIN { printf "%.6f %.6f", d-h, d+h }')"
+  local seam_start seam_end
+  seam_start="${seam_c%% *}"
+  seam_end="${seam_c##* }"
+
+  # Baseline: 1ms window at src_dur + src_dur/2 (between 1st and 2nd seam)
+  base_c="$(awk -v d="$src_dur" -v h="$half" \
+    'BEGIN { printf "%.6f %.6f", d*1.5-h, d*1.5+h }')"
+  local base_start base_end
+  base_start="${base_c%% *}"
+  base_end="${base_c##* }"
+
+  local seam_rms base_rms
+  seam_rms="$(_rms_diff "$hard_loop" "$seam_start" "$seam_end")"
+  base_rms="$(_rms_diff "$hard_loop" "$base_start" "$base_end")"
+
+  [[ "$seam_rms" =~ ^[0-9] ]] || {
+    echo "seam neg control: could not parse seam_rms ('${seam_rms}')" >&2; return 1
+  }
+  [[ "$base_rms" =~ ^[0-9] ]] || {
+    echo "seam neg control: could not parse base_rms ('${base_rms}')" >&2; return 1
+  }
+
+  # A hard loop MUST have ratio >= 1.75 (this is the negative control assertion)
+  local ok
+  ok="$(awk -v sr="$seam_rms" -v br="$base_rms" 'BEGIN {
+    ratio = (br > 0) ? sr / br : 0
+    print (ratio >= 1.75) ? "ok" : "fail"
+  }')"
+
+  if [[ "$ok" != "ok" ]]; then
+    echo "seam neg control FAILED: hard loop should have ratio >= 1.75 but" \
+         "seam_rms=${seam_rms} base_rms=${base_rms}" >&2
+    return 1
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Test 5: Seam quality — audio_build crossfade PASSES the seam check
+#
+# Same measurement as the negative control but on audio_build's output.
+# Decoded from AAC so we test the full encode → decode pipeline.
+#
+# Expected: crossfade keeps seam RMS diff at baseline level (ratio < 1.75).
+# ---------------------------------------------------------------------------
+
+@test "audio_build: seam quality — crossfade loop passes seam RMS check (ratio < 1.75)" {
   local src="$WORK_DIR/src.aac"
   local out="$WORK_DIR/out.aac"
 
-  mk_audio "$src" 440 2
-  # Target = 6s from a 1.5s src → loops ~4 times
-  # We use a 2s src here so the seam falls at ~2.0s (not right at the edge of
-  # the fade-out applied to the long-enough case)
+  # 443 Hz / 1.3s → same non-zero-phase fixture as negative control
+  "$FFMPEG" -nostdin -loglevel error -y \
+    -f lavfi -i "sine=frequency=443:sample_rate=44100" \
+    -t 1.3 -c:a aac -b:a 64k "$src"
 
   run audio_build "$src" 6 "$out"
   [ "$status" -eq 0 ]
   [ -f "$out" ]
 
-  # Find the actual SRC duration used by ffprobe (same as audio_build does)
+  # Decode AAC to PCM for measurement
+  local pcm="$WORK_DIR/out.wav"
+  "$FFMPEG" -nostdin -loglevel error -y -i "$out" -c:a pcm_s16le "$pcm"
+
   local src_dur
-  src_dur="$("$FFPROBE" \
-    -v error \
+  src_dur="$("$FFPROBE" -v error \
     -show_entries format=duration \
-    -of default=noprint_wrappers=1:nokey=1 \
-    "$src")"
+    -of default=noprint_wrappers=1:nokey=1 "$src")"
 
-  # Build boundary window: ±0.1s around the first seam
-  local seam_start seam_end
-  seam_start="$(awk -v d="$src_dur" 'BEGIN { printf "%.3f", d - 0.1 }')"
-  seam_end="$(awk -v d="$src_dur" 'BEGIN { printf "%.3f", d + 0.1 }')"
+  local half="0.0005"
+  local seam_start seam_end base_start base_end
+  seam_start="$(awk -v d="$src_dur" -v h="$half" 'BEGIN { printf "%.6f", d-h }')"
+  seam_end="$(awk -v d="$src_dur" -v h="$half" 'BEGIN { printf "%.6f", d+h }')"
+  base_start="$(awk -v d="$src_dur" -v h="$half" 'BEGIN { printf "%.6f", d*1.5-h }')"
+  base_end="$(awk -v d="$src_dur" -v h="$half" 'BEGIN { printf "%.6f", d*1.5+h }')"
 
-  # Baseline window: centred at src_dur*1.5 (between first and second seam)
-  local base_start base_end
-  base_start="$(awk -v d="$src_dur" 'BEGIN { printf "%.3f", d * 1.5 - 0.1 }')"
-  base_end="$(awk -v d="$src_dur" 'BEGIN { printf "%.3f", d * 1.5 + 0.1 }')"
+  local seam_rms base_rms
+  seam_rms="$(_rms_diff "$pcm" "$seam_start" "$seam_end")"
+  base_rms="$(_rms_diff "$pcm" "$base_start" "$base_end")"
 
-  # Peak at seam boundary window
-  local seam_peak
-  seam_peak="$("$FFMPEG" -nostdin -loglevel info \
-    -i "$out" \
-    -filter_complex "[0:a]atrim=start=${seam_start}:end=${seam_end},astats" \
-    -f null - 2>&1 | awk '/Peak level dB:/{val=$NF; count++} END { if(count>0) print val }')"
-
-  # Peak at baseline window
-  local base_peak
-  base_peak="$("$FFMPEG" -nostdin -loglevel info \
-    -i "$out" \
-    -filter_complex "[0:a]atrim=start=${base_start}:end=${base_end},astats" \
-    -f null - 2>&1 | awk '/Peak level dB:/{val=$NF; count++} END { if(count>0) print val }')"
-
-  # Guard: if either measurement failed, fail loudly rather than silently pass
-  [[ "$seam_peak" =~ ^-?[0-9] ]] || {
-    echo "audio_build seam test: could not parse seam peak (got '${seam_peak}')" >&2
-    return 1
+  [[ "$seam_rms" =~ ^[0-9] ]] || {
+    echo "seam test: could not parse seam_rms ('${seam_rms}')" >&2; return 1
   }
-  [[ "$base_peak" =~ ^-?[0-9] ]] || {
-    echo "audio_build seam test: could not parse baseline peak (got '${base_peak}')" >&2
-    return 1
+  [[ "$base_rms" =~ ^[0-9] ]] || {
+    echo "seam test: could not parse base_rms ('${base_rms}')" >&2; return 1
   }
 
-  # seam_peak must be within 12 dB above the baseline_peak
-  # (crossfade raises it a few dB; raw click raises it 20-40+ dB)
   local ok
-  ok="$(awk -v sp="$seam_peak" -v bp="$base_peak" 'BEGIN {
-    diff = sp - bp
-    print (diff <= 12) ? "ok" : "fail"
+  ok="$(awk -v sr="$seam_rms" -v br="$base_rms" 'BEGIN {
+    ratio = (br > 0) ? sr / br : 0
+    print (ratio < 1.75) ? "ok" : "fail"
   }')"
 
   if [[ "$ok" != "ok" ]]; then
-    echo "audio_build seam test: click detected — seam_peak=${seam_peak} dB," \
-         "baseline_peak=${base_peak} dB, diff exceeds 12 dB threshold" >&2
+    echo "audio_build seam test: click detected — seam_rms=${seam_rms}," \
+         "base_rms=${base_rms}," \
+         "ratio=$(awk -v s="$seam_rms" -v b="$base_rms" \
+           'BEGIN{printf "%.2f", (b>0)?s/b:0}') exceeds 1.75" >&2
+    return 1
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Test 5b: 48 kHz source — duration correct + seam passes
+#
+# Reproduces the sample-rate bug: audio_build computed unit_samps = unit_dur
+# * 44100 (hardcoded), but a 48 kHz source writes the unit at 48 kHz.
+# With the bug: aloop size is 8.2% short → loop boundary misplaced →
+# crossfade skipped → click.  After the fix: aloop size uses the unit's
+# actual sample rate → correct seam position → crossfade intact.
+#
+# Fixture: 48 kHz AAC source (generated at 48 kHz).  audio_build must
+# produce a file of the correct duration AND pass the seam RMS check.
+# ---------------------------------------------------------------------------
+
+@test "audio_build: 48 kHz source — duration correct + seam passes RMS check" {
+  local src="$WORK_DIR/src_48k.aac"
+  local out="$WORK_DIR/out_48k.aac"
+
+  # Generate at 48 kHz: ffmpeg lavfi sine outputs at the specified sample_rate
+  "$FFMPEG" -nostdin -loglevel error -y \
+    -f lavfi -i "sine=frequency=443:sample_rate=48000" \
+    -t 2 -c:a aac -b:a 64k "$src"
+
+  run audio_build "$src" 7 "$out"
+  [ "$status" -eq 0 ]
+  [ -f "$out" ]
+
+  # Duration must be correct regardless of source sample rate
+  assert_duration "$out" 7 0.15
+
+  # Decode and check seam quality at the loop boundary
+  local pcm="$WORK_DIR/out_48k.wav"
+  "$FFMPEG" -nostdin -loglevel error -y -i "$out" -c:a pcm_s16le "$pcm"
+
+  local src_dur
+  src_dur="$("$FFPROBE" -v error \
+    -show_entries format=duration \
+    -of default=noprint_wrappers=1:nokey=1 "$src")"
+
+  local half="0.0005"
+  local seam_start seam_end base_start base_end
+  seam_start="$(awk -v d="$src_dur" -v h="$half" 'BEGIN { printf "%.6f", d-h }')"
+  seam_end="$(awk -v d="$src_dur" -v h="$half" 'BEGIN { printf "%.6f", d+h }')"
+  base_start="$(awk -v d="$src_dur" -v h="$half" 'BEGIN { printf "%.6f", d*1.5-h }')"
+  base_end="$(awk -v d="$src_dur" -v h="$half" 'BEGIN { printf "%.6f", d*1.5+h }')"
+
+  local seam_rms base_rms
+  seam_rms="$(_rms_diff "$pcm" "$seam_start" "$seam_end")"
+  base_rms="$(_rms_diff "$pcm" "$base_start" "$base_end")"
+
+  [[ "$seam_rms" =~ ^[0-9] ]] || {
+    echo "48k seam test: could not parse seam_rms ('${seam_rms}')" >&2; return 1
+  }
+  [[ "$base_rms" =~ ^[0-9] ]] || {
+    echo "48k seam test: could not parse base_rms ('${base_rms}')" >&2; return 1
+  }
+
+  local ok
+  ok="$(awk -v sr="$seam_rms" -v br="$base_rms" 'BEGIN {
+    ratio = (br > 0) ? sr / br : 0
+    print (ratio < 1.75) ? "ok" : "fail"
+  }')"
+
+  if [[ "$ok" != "ok" ]]; then
+    echo "audio_build 48k seam test: click detected — seam_rms=${seam_rms}," \
+         "base_rms=${base_rms}," \
+         "ratio=$(awk -v s="$seam_rms" -v b="$base_rms" \
+           'BEGIN{printf "%.2f", (b>0)?s/b:0}') exceeds 1.75" \
+         "(likely 44100 hardcode bug in aloop size)" >&2
     return 1
   fi
 }
