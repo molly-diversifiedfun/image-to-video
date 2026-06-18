@@ -53,3 +53,44 @@ teardown() {
   # Frame 90 is at the 3-second mark — interior, no seam
   assert_seam_ok "$WORK_DIR/long.mp4" 90
 }
+
+# --- Failure-path tests: the assertion must FAIL on bad inputs ---------------
+
+@test "assert_has_stream FAILS on a video-only clip (no audio)" {
+  # Build a silent video (no audio stream at all)
+  "$FFMPEG" \
+    -nostdin -loglevel error -y \
+    -f lavfi -i "color=c=blue:s=320x180:d=3,format=yuv420p" \
+    -c:v libx264 -preset ultrafast \
+    "$WORK_DIR/silent.mp4"
+  # assert_has_stream for 'a' must return non-zero
+  run assert_has_stream "$WORK_DIR/silent.mp4" a
+  [ "$status" -ne 0 ]
+}
+
+@test "assert_seam_ok FAILS on a hard-cut between two solid colors" {
+  # Two solid-color segments concatenated with a hard cut — boundary frames are
+  # maximally different, so PSNR will be far below any baseline.
+  local part1="$WORK_DIR/red.mp4"
+  local part2="$WORK_DIR/green.mp4"
+  local concat_list="$WORK_DIR/concat.txt"
+  local seam_clip="$WORK_DIR/seam.mp4"
+
+  "$FFMPEG" -nostdin -loglevel error -y \
+    -f lavfi -i "color=c=red:s=320x180:d=2,format=yuv420p" \
+    -c:v libx264 -preset ultrafast "$part1"
+  "$FFMPEG" -nostdin -loglevel error -y \
+    -f lavfi -i "color=c=green:s=320x180:d=2,format=yuv420p" \
+    -c:v libx264 -preset ultrafast "$part2"
+
+  printf "file '%s'\nfile '%s'\n" "$part1" "$part2" > "$concat_list"
+  "$FFMPEG" -nostdin -loglevel error -y \
+    -f concat -safe 0 -i "$concat_list" \
+    -c copy "$seam_clip"
+
+  # The concat sources encode at 25fps (default lavfi color fps).
+  # 2s × 25fps = 50 frames per segment, so frame 50 is the first green frame.
+  # assert_seam_ok checks frames (FRAME-1, FRAME) = (49, 50) = last red / first green.
+  run assert_seam_ok "$seam_clip" 50
+  [ "$status" -ne 0 ]
+}

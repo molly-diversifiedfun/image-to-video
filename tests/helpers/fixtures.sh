@@ -19,7 +19,8 @@ _REPO_ROOT="$(cd "$_FIXTURES_DIR/../.." && pwd)"
 
 if [[ -f "$_REPO_ROOT/bin/ffmpeg" && -f "$_REPO_ROOT/bin/ffprobe" ]]; then
   chmod +x "$_REPO_ROOT/bin/ffmpeg" "$_REPO_ROOT/bin/ffprobe" 2>/dev/null || true
-  xattr -dr com.apple.quarantine "$_REPO_ROOT/bin" 2>/dev/null || true
+  # xattr is macOS-only; skip on Linux so the harness doesn't error on other platforms
+  [[ "$(uname)" == "Darwin" ]] && xattr -dr com.apple.quarantine "$_REPO_ROOT/bin" 2>/dev/null || true
   FFMPEG="$_REPO_ROOT/bin/ffmpeg"
   FFPROBE="$_REPO_ROOT/bin/ffprobe"
 else
