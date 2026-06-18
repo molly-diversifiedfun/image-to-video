@@ -159,20 +159,28 @@ make_one() {
     # Audio requested: build silent to a temp file, then mux audio on top.
     [[ -e "$AUDIO_PATH" ]] || die "--audio path not found: $AUDIO_PATH"
     local tmp_dir; tmp_dir="$(mktemp -d)"
+    # _cleanup_audio_tmp is defined here and called on every exit path below
+    # (success and all failure branches).  We cannot rely on a RETURN trap
+    # because set -euo pipefail causes the shell to exit the script (not just
+    # the function) when a pipeline step fails, so RETURN never fires.
+    _cleanup_audio_tmp() { rm -rf "$tmp_dir"; }
     local tmp_silent="$tmp_dir/silent.mp4"
     local tmp_audio="$tmp_dir/audio.aac"
 
     # Step 1: build the silent video into tmp (static or zoom, same as today).
-    if [[ "$ZOOM_PCT" == "0" ]]; then make_static "$img" "$total" "$tmp_silent"
-    else make_zoom "$img" "$total" "$tmp_silent"; fi
+    if [[ "$ZOOM_PCT" == "0" ]]; then
+      make_static "$img" "$total" "$tmp_silent" || { _cleanup_audio_tmp; return 1; }
+    else
+      make_zoom "$img" "$total" "$tmp_silent"   || { _cleanup_audio_tmp; return 1; }
+    fi
 
     # Step 2: build audio to exactly $total seconds (loops/trims as needed).
-    audio_build "$AUDIO_PATH" "$total" "$tmp_audio"
+    audio_build "$AUDIO_PATH" "$total" "$tmp_audio" || { _cleanup_audio_tmp; return 1; }
 
     # Step 3: mux audio onto the silent video (-c:v copy — video NOT re-encoded).
-    mux_audio "$tmp_silent" "$tmp_audio" "$out"
+    mux_audio "$tmp_silent" "$tmp_audio" "$out" || { _cleanup_audio_tmp; return 1; }
 
-    rm -rf "$tmp_dir"
+    _cleanup_audio_tmp
   fi
 
   printf '✓ %s  (%sh = %ss, zoom %s%%, audio %s)  ->  %s\n' \

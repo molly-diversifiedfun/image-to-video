@@ -188,3 +188,48 @@ teardown() {
     "$out")"
   [ "$ref_frames" = "$out_frames" ]
 }
+
+# ---------------------------------------------------------------------------
+# Test 6: Temp-dir leak — a failed --audio run must not orphan a tmp dir.
+#
+# Strategy:
+#   1. Snapshot all existing tmp dirs that contain silent.mp4 (none expected).
+#   2. Run make-video with --audio /nonexistent-path so audio_build fails after
+#      make_one has already created its tmp_dir and built the silent video.
+#   3. Assert that no NEW tmp dir containing silent.mp4 was left behind.
+#
+# Why this exercises the bug: make_one creates tmp_dir, runs make_static
+# (succeeds → silent.mp4 lands in tmp_dir), then calls audio_build with a bad
+# path (fails → set -euo pipefail exits make_one immediately, skipping rm -rf).
+# Without the trap the silent.mp4 is orphaned.  With the trap it is cleaned up.
+# ---------------------------------------------------------------------------
+
+@test "make-video --audio (failure): no orphaned temp dir left behind after mid-pipeline failure" {
+  local img="$WORK_DIR/img.png"
+  # A zero-byte file that exists (passes the -e check) but is not valid audio,
+  # so audio_build will fail AFTER tmp_dir is created and silent.mp4 is built.
+  local bad_audio="$WORK_DIR/bad.aac"
+  mk_image "$img" orange
+  touch "$bad_audio"   # exists but empty → audio_build returns non-zero
+
+  # Snapshot: count existing silent.mp4 files in the system temp area BEFORE.
+  # We count rather than list because unrelated processes may add/remove dirs
+  # concurrently; counting the delta is more robust than comparing exact lists.
+  local sys_tmp
+  sys_tmp="$(dirname "$(mktemp -u)")"  # /var/folders/... on macOS, /tmp on Linux
+
+  local before_count
+  before_count="$(find "$sys_tmp" -maxdepth 2 -name 'silent.mp4' 2>/dev/null | wc -l | tr -d ' ')"
+
+  # Run — make_one will: create tmp_dir, build silent.mp4 (succeeds),
+  # call audio_build with the empty file (fails) → set -euo pipefail exits
+  # before rm -rf without the cleanup guard.  With the guard it is cleaned up.
+  run "$REPO_ROOT/make-video" "$img" 0.005 --audio "$bad_audio" --out "$WORK_DIR"
+  [ "$status" -ne 0 ]  # must fail
+
+  # Assert no NEW silent.mp4 orphans appeared after the failed run.
+  local after_count
+  after_count="$(find "$sys_tmp" -maxdepth 2 -name 'silent.mp4' 2>/dev/null | wc -l | tr -d ' ')"
+
+  [ "$after_count" -eq "$before_count" ]
+}
