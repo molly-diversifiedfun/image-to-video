@@ -25,6 +25,12 @@
 #     --zoom 4    slow continuous zoom of 4% over the whole video (re-encodes,
 #                 GPU-accelerated; a 3h file takes ~1.5-2h instead of ~90s).
 #
+# Optional soundtrack:
+#     --audio PATH   add a soundtrack; PATH is a single audio file or a folder
+#                    of audio files (crossfaded playlist). The audio is looped /
+#                    trimmed to exactly match the video duration, then muxed in.
+#                    Video stream is always copied (not re-encoded).
+#
 # HOURS may be fractional (0.5 = 30 min, 0.0167 ≈ 1 min).
 # Point at a FOLDER instead of a file to batch the whole directory in parallel.
 
@@ -42,6 +48,9 @@ ZOOM_PCT="${ZOOM_PCT:-0}"       # 0 = static (default, fast); opt in with --zoom
 readonly VBITRATE=25M           # zoom-mode target bitrate (GPU/VideoToolbox encode)
 readonly ZOOM_W=4096            # intermediate width — bigger = smoother subpixel zoom
 
+# --- audio settings ---
+AUDIO_PATH="${AUDIO_PATH:-}"    # empty = no soundtrack; set via --audio or env export
+
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
 cores() { sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4; }
 
@@ -57,6 +66,20 @@ if [[ -f "$SCRIPT_DIR/bin/ffmpeg" && -f "$SCRIPT_DIR/bin/ffprobe" ]]; then
 else
   FFMPEG="$(command -v ffmpeg || true)"; FFPROBE="$(command -v ffprobe || true)"
 fi
+
+# Source shared libs.  These live alongside this script.
+# shellcheck source=lib/audio.sh
+source "$SCRIPT_DIR/lib/audio.sh"
+# shellcheck source=lib/mux.sh
+source "$SCRIPT_DIR/lib/mux.sh"
+# shellcheck source=lib/classify.sh
+source "$SCRIPT_DIR/lib/classify.sh"
+# shellcheck source=lib/duration.sh
+source "$SCRIPT_DIR/lib/duration.sh"
+# shellcheck source=lib/loop.sh
+source "$SCRIPT_DIR/lib/loop.sh"
+# shellcheck source=lib/seam.sh
+source "$SCRIPT_DIR/lib/seam.sh"
 
 preflight() {
   [[ -n "$FFMPEG" && -n "$FFPROBE" ]] && return 0
@@ -128,16 +151,48 @@ make_zoom() {
 }
 
 # Build one video: image + hours -> out_path.
+# If $AUDIO_PATH is set, builds a silent video to a temp file first, then
+# calls audio_build + mux_audio to attach the soundtrack (video stream copied).
 make_one() {
   local img="$1" hours="$2" out="$3"
   [[ -f "$img" ]] || die "no such file: $img"
   local total; total=$(awk -v h="$hours" 'BEGIN{printf "%d", h*3600 + 0.5}')
   [[ "$total" -gt 0 ]] || die "hours must be > 0 (got: $hours)"
 
-  if [[ "$ZOOM_PCT" == "0" ]]; then make_static "$img" "$total" "$out"
-  else make_zoom "$img" "$total" "$out"; fi
-  printf '✓ %s  (%sh = %ss, zoom %s%%)  ->  %s\n' \
-    "$(basename "$img")" "$hours" "$total" "$ZOOM_PCT" "$out"
+  if [[ -z "$AUDIO_PATH" ]]; then
+    # No audio: original silent behaviour.
+    if [[ "$ZOOM_PCT" == "0" ]]; then make_static "$img" "$total" "$out"
+    else make_zoom "$img" "$total" "$out"; fi
+  else
+    # Audio requested: build silent to a temp file, then mux audio on top.
+    [[ -e "$AUDIO_PATH" ]] || die "--audio path not found: $AUDIO_PATH"
+    local tmp_dir; tmp_dir="$(mktemp -d)"
+    # _cleanup_audio_tmp is defined here and called on every exit path below
+    # (success and all failure branches).  We cannot rely on a RETURN trap
+    # because set -euo pipefail causes the shell to exit the script (not just
+    # the function) when a pipeline step fails, so RETURN never fires.
+    _cleanup_audio_tmp() { rm -rf "$tmp_dir"; }
+    local tmp_silent="$tmp_dir/silent.mp4"
+    local tmp_audio="$tmp_dir/audio.aac"
+
+    # Step 1: build the silent video into tmp (static or zoom, same as today).
+    if [[ "$ZOOM_PCT" == "0" ]]; then
+      make_static "$img" "$total" "$tmp_silent" || { _cleanup_audio_tmp; return 1; }
+    else
+      make_zoom "$img" "$total" "$tmp_silent"   || { _cleanup_audio_tmp; return 1; }
+    fi
+
+    # Step 2: build audio to exactly $total seconds (loops/trims as needed).
+    audio_build "$AUDIO_PATH" "$total" "$tmp_audio" || { _cleanup_audio_tmp; return 1; }
+
+    # Step 3: mux audio onto the silent video (-c:v copy — video NOT re-encoded).
+    mux_audio "$tmp_silent" "$tmp_audio" "$out" || { _cleanup_audio_tmp; return 1; }
+
+    _cleanup_audio_tmp
+  fi
+
+  printf '✓ %s  (%sh = %ss, zoom %s%%, audio %s)  ->  %s\n' \
+    "$(basename "$img")" "$hours" "$total" "$ZOOM_PCT" "${AUDIO_PATH:-(none)}" "$out"
 }
 
 is_image() {
@@ -157,18 +212,29 @@ out_path() {  # image, outdir -> outdir/name.mp4
 # ---- argument parsing -------------------------------------------------------
 
 MODE="single" DIR="" MANIFEST="" OUTDIR="" JOBS="" HOURS=""
+LOOP_STRATEGY="crossfade"   # loop-extend: crossfade|pingpong|native
+LOOP_XFADE="1.0"            # loop-extend: xfade window in seconds
+LOOP_YES=0                  # loop-extend: 1 = skip interactive prompt
 POS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --dir)      MODE="dir";      DIR="$2";      shift 2;;
-    --manifest) MODE="manifest"; MANIFEST="$2"; shift 2;;
-    --out)      OUTDIR="$2";     shift 2;;
-    --jobs)     JOBS="$2";       shift 2;;
-    --zoom)     ZOOM_PCT="$2";   shift 2;;
-    --static)   ZOOM_PCT=0;      shift;;
+    --dir)      MODE="dir";           DIR="$2";            shift 2;;
+    --manifest) MODE="manifest";      MANIFEST="$2";       shift 2;;
+    --out)      OUTDIR="$2";          shift 2;;
+    --jobs)     JOBS="$2";            shift 2;;
+    --zoom)     ZOOM_PCT="$2";        shift 2;;
+    --static)   ZOOM_PCT=0;           shift;;
+    --audio)    AUDIO_PATH="$2";      shift 2;;
+    --loop)
+      case "$2" in
+        crossfade|pingpong|native) LOOP_STRATEGY="$2"; shift 2;;
+        *) die "unknown --loop value '${2}' (use crossfade|pingpong|native)";;
+      esac;;
+    --xfade)    LOOP_XFADE="$2";      shift 2;;
+    --yes)      LOOP_YES=1;           shift;;
     -h|--help)  sed -n '2,40p' "$0"; exit 0;;
     -*)         die "unknown flag: $1";;
-    *)          POS+=("$1");     shift;;
+    *)          POS+=("$1");          shift;;
   esac
 done
 
@@ -192,6 +258,210 @@ fi
 
 [[ -n "$OUTDIR" ]] && mkdir -p "$OUTDIR"
 export ZOOM_PCT                 # propagate to re-invoked single-mode children
+export AUDIO_PATH               # propagate to re-invoked single-mode children
+
+# ---------------------------------------------------------------------------
+# loop_extend_mode CLIP HOURS OUT
+#
+# Called when classify_input says the input is a single video clip.
+# Builds a seamless-loop long video from CLIP.
+#
+# 1. parse_duration HOURS → target_secs
+# 2. Build loop unit: loop_unit CLIP unit.mp4 --loop STRATEGY --xfade XFADE
+# 3. Preview gate: seam_check at wrap boundary → verdict + estimated size.
+#    Print: verdict line, estimated output duration/size, seam-preview path.
+#    If NOT SEAMLESS: print pingpong recommendation.
+#    Prompt only when stdin is a TTY AND --yes not given; otherwise auto-proceed.
+# 4. Tile unit to fill target_secs via concat-copy, then trim to exact target.
+# 5. Audio: keep unit's native audio (from loop_unit) unless --audio PATH given
+#    (then use audio_build + mux_audio to replace).
+# 6. Clean up all temps on ALL exit paths using explicit || { cleanup; return 1; }.
+# ---------------------------------------------------------------------------
+loop_extend_mode() {
+  local clip="$1"
+  local hours="$2"
+  local out="$3"
+
+  [[ -f "$clip" ]] || die "no such file: $clip"
+
+  # --zoom (zoompan) is a still-image-mode feature; it has no meaning for a
+  # video clip input.  Reject early rather than silently ignoring it.
+  [[ "$ZOOM_PCT" == "0" ]] || die "--zoom is not supported in loop-extend mode (video input)"
+
+  local target_secs
+  target_secs="$(parse_duration "$hours")" || die "invalid HOURS: $hours"
+  [[ "$target_secs" -gt 0 ]] || die "hours must be > 0 (got: $hours)"
+
+  # Validate --audio path early (before expensive work)
+  if [[ -n "$AUDIO_PATH" ]]; then
+    [[ -e "$AUDIO_PATH" ]] || die "--audio path not found: $AUDIO_PATH"
+  fi
+
+  local tmp_dir
+  tmp_dir="$(mktemp -d)"
+  # Named sentinel file so the cleanup assertion in the test can detect leaks.
+  local unit_file="$tmp_dir/loop_unit_0.mp4"
+  local tiled_file="$tmp_dir/tiled.mp4"
+  local list_file="$tmp_dir/concat.txt"
+
+  _cleanup_loop_tmp() { rm -rf "$tmp_dir"; }
+
+  # ------------------------------------------------------------------
+  # Step 2: build the loop unit
+  # ------------------------------------------------------------------
+  loop_unit "$clip" "$unit_file" \
+    --loop "$LOOP_STRATEGY" --xfade "$LOOP_XFADE" \
+    || { _cleanup_loop_tmp; return 1; }
+
+  # ------------------------------------------------------------------
+  # Step 3: preview gate
+  #   - get unit duration (for tiling math) and EXACT packet count (for seam_check)
+  #   - run seam_check on the wrap boundary using the real packet count
+  #   - print verdict, estimated output, preview path
+  #   - if NOT SEAMLESS and not already on pingpong: print recommendation
+  #   - prompt only if stdin is TTY and --yes not set
+  # ------------------------------------------------------------------
+  local unit_dur
+  unit_dur="$("$FFPROBE" \
+    -v error \
+    -show_entries format=duration \
+    -of default=noprint_wrappers=1:nokey=1 \
+    "$unit_file")" || { _cleanup_loop_tmp; return 1; }
+
+  # Derive the boundary frame from the ACTUAL video packet count, not from
+  # duration * fps arithmetic.  The float-rounding in duration*fps can be off
+  # by ±1, which points the probe mid-second-copy rather than at the real cut
+  # and can report a wrong verdict (e.g. SOFT on a truly seamless pingpong).
+  # Packet count is exact — identical to what assert_seam_ok / test 2 use.
+  local unit_frames
+  unit_frames="$("$FFPROBE" -v error \
+    -select_streams v:0 \
+    -count_packets \
+    -show_entries stream=nb_read_packets \
+    -of default=noprint_wrappers=1:nokey=1 \
+    "$unit_file")"
+  [[ "$unit_frames" =~ ^[0-9]+$ ]] || { _cleanup_loop_tmp; return 1; }
+
+  # Need at least frame 12 for seam_check to produce a meaningful baseline.
+  local verdict=""
+  if [[ "$unit_frames" -ge 12 ]]; then
+    # Build a 2-copy tile for seam_check (cheap concat-copy)
+    printf "file '%s'\n" "$unit_file" > "$list_file"
+    printf "file '%s'\n" "$unit_file" >> "$list_file"
+    local preview_file="$tmp_dir/seam_preview.mp4"
+    "$FFMPEG" -nostdin -loglevel error -y \
+      -f concat -safe 0 -i "$list_file" \
+      -c copy "$preview_file" \
+      || { _cleanup_loop_tmp; return 1; }
+
+    local seam_output
+    seam_output="$(seam_check "$preview_file" "$unit_frames" 2>/dev/null)" || seam_output="seam@${unit_frames}: measurement skipped"
+    verdict="$(echo "$seam_output" | grep -oE '(SEAMLESS|SOFT|VISIBLE)' | head -1 || true)"
+
+    # Estimated output size (rough: unit_file_size / unit_dur * target_secs)
+    local unit_size_bytes
+    unit_size_bytes="$(wc -c < "$unit_file" | tr -d ' ')"
+    local est_mb
+    est_mb="$(awk -v sz="$unit_size_bytes" -v ud="$unit_dur" -v ts="$target_secs" \
+      'BEGIN { printf "%.0f", sz / ud * ts / 1048576 }')"
+
+    printf '[loop-extend] preview gate\n'
+    printf '  %s\n' "$seam_output"
+    printf '  estimated output: %s s, ~%s MB\n' "$target_secs" "$est_mb"
+    printf '  seam preview clip: %s\n' "$preview_file"
+
+    # Only suggest pingpong when not already using it (avoid confusing tip-on-pingpong)
+    if [[ "$verdict" != "SEAMLESS" && "$LOOP_STRATEGY" != "pingpong" ]]; then
+      printf '  tip: for a truly seamless loop try --loop pingpong (note: it reverses motion on alternate passes)\n'
+    fi
+  else
+    printf '[loop-extend] preview gate: unit too short for seam measurement (skipped)\n'
+  fi
+
+  # Go/no-go gate: prompt only if stdin is a TTY AND --yes was not given
+  if [[ -t 0 && "$LOOP_YES" -eq 0 ]]; then
+    printf 'Continue? [Y/n] '
+    local answer
+    read -r answer
+    case "${answer:-y}" in
+      y|Y|yes|YES) ;;
+      *) printf 'Aborted.\n'; _cleanup_loop_tmp; return 1 ;;
+    esac
+  fi
+
+  # ------------------------------------------------------------------
+  # Step 4: tile unit to fill target_secs, then trim to exact target
+  #
+  # How many copies of the unit do we need?
+  # copies = ceil(target_secs / unit_dur) + 1 (safety margin)
+  # Then trim with ffmpeg using -t target_secs and -c copy.
+  #
+  # Note: -c copy with -t is not always frame-accurate for variable-bitrate
+  # content, but is within ±1 frame (±1/fps ≈ 0.033 s) for H.264 CBR segments,
+  # which is well within our ±1.0 s test tolerance.
+  # ------------------------------------------------------------------
+  local copies
+  copies="$(awk -v ts="$target_secs" -v ud="$unit_dur" \
+    'BEGIN { printf "%d", int(ts / ud) + 2 }')"
+
+  : > "$list_file"
+  local i
+  for (( i=0; i<copies; i++ )); do
+    printf "file '%s'\n" "$unit_file" >> "$list_file"
+  done
+
+  # Determine if unit has audio
+  local unit_has_audio=0
+  local ua_count
+  ua_count="$("$FFPROBE" -v error \
+    -select_streams a \
+    -show_entries stream=index \
+    -of csv=p=0 \
+    "$unit_file" | grep -c .)" || true
+  ua_count="${ua_count:-0}"
+  [[ "$ua_count" -ge 1 ]] && unit_has_audio=1
+
+  if [[ -z "$AUDIO_PATH" ]]; then
+    # No external audio: tile + trim to produce the final output directly.
+    if [[ "$unit_has_audio" -eq 1 ]]; then
+      "$FFMPEG" -nostdin -loglevel error -y \
+        -f concat -safe 0 -i "$list_file" \
+        -t "$target_secs" \
+        -c copy \
+        -movflags +faststart \
+        "$out" || { _cleanup_loop_tmp; return 1; }
+    else
+      "$FFMPEG" -nostdin -loglevel error -y \
+        -f concat -safe 0 -i "$list_file" \
+        -t "$target_secs" \
+        -c:v copy -an \
+        -movflags +faststart \
+        "$out" || { _cleanup_loop_tmp; return 1; }
+    fi
+  else
+    # External audio requested: tile silent (or native-audio) tiled video to
+    # a temp file, then replace audio with audio_build + mux_audio.
+    "$FFMPEG" -nostdin -loglevel error -y \
+      -f concat -safe 0 -i "$list_file" \
+      -t "$target_secs" \
+      -c:v copy -an \
+      -movflags +faststart \
+      "$tiled_file" || { _cleanup_loop_tmp; return 1; }
+
+    local tmp_audio="$tmp_dir/audio.aac"
+    audio_build "$AUDIO_PATH" "$target_secs" "$tmp_audio" \
+      || { _cleanup_loop_tmp; return 1; }
+
+    mux_audio "$tiled_file" "$tmp_audio" "$out" \
+      || { _cleanup_loop_tmp; return 1; }
+  fi
+
+  _cleanup_loop_tmp
+
+  printf '✓ %s  (%sh = %ss, loop %s, xfade %ss, audio %s)  ->  %s\n' \
+    "$(basename "$clip")" "$hours" "$target_secs" "$LOOP_STRATEGY" "$LOOP_XFADE" \
+    "${AUDIO_PATH:-(native)}" "$out"
+}
 
 case "$MODE" in
   # Parallel modes re-invoke THIS script in single mode (one process per image),
@@ -199,7 +469,15 @@ case "$MODE" in
   # delimiter, so spaces in paths (e.g. "/Volumes/1TB SSD/...") are safe.
   single)
     [[ ${#POS[@]} -ge 2 ]] || die "usage: $0 FILE HOURS [OUTDIR]"
-    make_one "${POS[0]}" "${POS[1]}" "$(out_path "${POS[0]}" "${POS[2]:-$OUTDIR}")"
+
+    # Classify the input: if it's a video, enter loop-extend mode (PRD-2).
+    _input_kind="$(classify_input "${POS[0]}" 2>/dev/null || echo "unknown")"
+    if [[ "$_input_kind" == "video" ]]; then
+      loop_extend_mode "${POS[0]}" "${POS[1]}" \
+        "$(out_path "${POS[0]}" "${POS[2]:-$OUTDIR}")"
+    else
+      make_one "${POS[0]}" "${POS[1]}" "$(out_path "${POS[0]}" "${POS[2]:-$OUTDIR}")"
+    fi
     ;;
   dir)
     [[ -d "$DIR" ]] || die "no such directory: $DIR"
