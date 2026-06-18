@@ -7,15 +7,19 @@ The trick that makes it fast: a static image only needs **one keyframe for the w
 ## Requirements
 
 - macOS, **Apple Silicon** (M1–M5)
-- ffmpeg + ffprobe — fetched into `bin/` (see [Setup](#setup)); no other dependencies
+- ffmpeg + ffprobe — `brew install ffmpeg` (see [Setup](#setup)); no other dependencies
 
 ## Setup
 
 ```bash
-./setup-mac-arm64.sh      # downloads + checksum-verifies ffmpeg/ffprobe into bin/
+brew install ffmpeg       # recommended — installs ffmpeg + ffprobe on your PATH
 ```
 
-Alternatives: `brew install ffmpeg`, or drop your own static `ffmpeg`/`ffprobe` into `bin/`. The script prefers `bin/`, then falls back to `PATH`.
+The tool finds ffmpeg/ffprobe automatically: it prefers a copy bundled in `bin/`, then falls back to whatever is on your `PATH` (so a Homebrew install just works).
+
+**No Homebrew?** Two portable alternatives that need no system install:
+- `./setup-mac-arm64.sh` — downloads + checksum-verifies static ffmpeg/ffprobe into `bin/` (good for running self-contained off a USB/SSD).
+- Or drop your own static `ffmpeg`/`ffprobe` binaries into `bin/`.
 
 ## Usage
 

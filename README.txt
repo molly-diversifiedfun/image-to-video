@@ -11,6 +11,9 @@ SETUP
 Nothing to install. Everything this tool needs is already inside the
 "bin" folder next to it. Just open Terminal and use it (below).
 
+(If the "bin" folder is ever empty or you moved the tool somewhere new,
+run  brew install ffmpeg  once and it'll keep working.)
+
 (Apple Silicon Mac only — M1/M2/M3/M4/M5. If you ever move this to an
 Intel Mac it won't run; ask Molly for the Intel version.)
 
