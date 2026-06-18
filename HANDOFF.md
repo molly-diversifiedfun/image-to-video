@@ -45,8 +45,8 @@ NOTE: not yet merged to `main`; drive copy at `/Volumes/1TB SSD/ImageToVideo/` s
 - [x] Production smoke: PRD-5 real-smoked on the actual 4K fine-art TIFF + audio; PRD-2 real-smoked on a motion clip with `--loop pingpong` (preview reported SEAMLESS, output 36s h264+aac)
 - [x] Docs current: README.md, README.txt, architecture, 5 PRDs, implementation plan, this HANDOFF
 - [x] Branch pushed to origin
-- [ ] **NOT merged to `main`** (intentional — awaiting decision to ship)
-- [ ] **Drive copy NOT synced** — `/Volumes/1TB SSD/ImageToVideo/` still has the old silent-only tool; re-copy `make-video` + `lib/` (binaries already there) when shipping
+- [x] **Merged to `main`** and pushed (merge commit; `main` at `345cd06`+).
+- [ ] **Drive copy NOT yet synced** — the external SSD was unmounted at ship time. When it's reconnected, run `./sync-to-drive.sh` (defaults to `/Volumes/1TB SSD/ImageToVideo`) to copy `make-video` + `lib/` + `README.txt` (bundled ffmpeg already on the drive), then smoke from the drive with a clean PATH.
 - N/A: registry-membership (no registry pattern in this project)
 
 ## Recurring lesson (worth a `/learn`)
