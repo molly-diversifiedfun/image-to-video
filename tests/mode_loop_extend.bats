@@ -215,17 +215,80 @@ teardown() {
   mk_clip "$clip" 440 3
   touch "$bad_audio"   # exists but empty → audio_build returns non-zero
 
-  local sys_tmp
-  sys_tmp="$(dirname "$(mktemp -u)")"
+  # Snapshot ALL tmp.* entries in TMPDIR before the run (stronger than checking
+  # one specific filename — catches any mktemp-created dir that leaks).
+  local tmpbase="${TMPDIR:-/tmp}"
+  # Strip trailing slash for consistent path construction
+  tmpbase="${tmpbase%/}"
 
-  local before_count
-  before_count="$(find "$sys_tmp" -maxdepth 2 -name 'loop_unit_*.mp4' 2>/dev/null | wc -l | tr -d ' ')"
+  local before_dirs
+  before_dirs="$(find "$tmpbase" -maxdepth 1 -name 'tmp.*' -type d 2>/dev/null | sort)"
 
   run "$REPO_ROOT/make-video" "$clip" 0.005 --yes --audio "$bad_audio" --out "$WORK_DIR"
   [ "$status" -ne 0 ]
 
-  local after_count
-  after_count="$(find "$sys_tmp" -maxdepth 2 -name 'loop_unit_*.mp4' 2>/dev/null | wc -l | tr -d ' ')"
+  local after_dirs
+  after_dirs="$(find "$tmpbase" -maxdepth 1 -name 'tmp.*' -type d 2>/dev/null | sort)"
 
-  [ "$after_count" -eq "$before_count" ]
+  # No new tmp.* dirs should have appeared
+  [ "$before_dirs" = "$after_dirs" ]
+}
+
+# ---------------------------------------------------------------------------
+# Test 8 — REGRESSION: preview gate reports SEAMLESS for pingpong output.
+#
+# This test exists to catch the frame-index off-by-one bug where
+# unit_frames was computed from duration*fps (floating point, off by ±1)
+# instead of the actual packet count.  The wrong frame pointed mid-clip-2
+# rather than at the wrap, making the gate report SOFT even for a truly
+# seamless pingpong loop.
+#
+# Contract: make-video --loop pingpong --yes prints "SEAMLESS" in the
+# preview gate output, matching the real seam quality that test 2 proves.
+# ---------------------------------------------------------------------------
+
+@test "loop-extend --loop pingpong: preview gate reports SEAMLESS verdict" {
+  local clip="$WORK_DIR/src.mp4"
+  local out="$WORK_DIR/src.mp4"
+  # Use a 4-second clip so the unit has enough frames for seam_check (>=12)
+  mk_clip "$clip" 440 4
+
+  run "$REPO_ROOT/make-video" "$clip" 0.005 --loop pingpong --yes --out "$WORK_DIR"
+  [ "$status" -eq 0 ]
+
+  # The preview gate MUST print "SEAMLESS" for pingpong (the actual seam is seamless)
+  echo "$output" | grep -q "SEAMLESS"
+}
+
+# ---------------------------------------------------------------------------
+# Test 9 — --zoom on a video input must be rejected with a clear error.
+#
+# --zoom is a still-image-mode flag (it drives the zoompan filter on images).
+# Silently ignoring it in loop-extend mode would confuse operators who expect
+# Ken Burns motion.  We require a die() with a helpful message instead.
+# ---------------------------------------------------------------------------
+
+@test "loop-extend: --zoom on a video input fails with clear error" {
+  local clip="$WORK_DIR/src.mp4"
+  mk_clip "$clip" 440 3
+
+  run "$REPO_ROOT/make-video" "$clip" 0.005 --zoom 4 --yes --out "$WORK_DIR"
+  [ "$status" -ne 0 ]
+  echo "$output" | grep -qi "zoom"
+}
+
+# ---------------------------------------------------------------------------
+# Test 10 — invalid --loop value rejected at flag-parse time.
+#
+# loop_unit would error eventually, but a clean rejection at argument parse
+# time gives a more useful error message than an ffmpeg failure deep inside.
+# ---------------------------------------------------------------------------
+
+@test "loop-extend: invalid --loop value rejected with clear error" {
+  local clip="$WORK_DIR/src.mp4"
+  mk_clip "$clip" 440 3
+
+  run "$REPO_ROOT/make-video" "$clip" 0.005 --loop bogus --yes --out "$WORK_DIR"
+  [ "$status" -ne 0 ]
+  echo "$output" | grep -qi "loop"
 }

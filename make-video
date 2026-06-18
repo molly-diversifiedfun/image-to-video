@@ -225,7 +225,11 @@ while [[ $# -gt 0 ]]; do
     --zoom)     ZOOM_PCT="$2";        shift 2;;
     --static)   ZOOM_PCT=0;           shift;;
     --audio)    AUDIO_PATH="$2";      shift 2;;
-    --loop)     LOOP_STRATEGY="$2";   shift 2;;
+    --loop)
+      case "$2" in
+        crossfade|pingpong|native) LOOP_STRATEGY="$2"; shift 2;;
+        *) die "unknown --loop value '${2}' (use crossfade|pingpong|native)";;
+      esac;;
     --xfade)    LOOP_XFADE="$2";      shift 2;;
     --yes)      LOOP_YES=1;           shift;;
     -h|--help)  sed -n '2,40p' "$0"; exit 0;;
@@ -280,6 +284,10 @@ loop_extend_mode() {
 
   [[ -f "$clip" ]] || die "no such file: $clip"
 
+  # --zoom (zoompan) is a still-image-mode feature; it has no meaning for a
+  # video clip input.  Reject early rather than silently ignoring it.
+  [[ "$ZOOM_PCT" == "0" ]] || die "--zoom is not supported in loop-extend mode (video input)"
+
   local target_secs
   target_secs="$(parse_duration "$hours")" || die "invalid HOURS: $hours"
   [[ "$target_secs" -gt 0 ]] || die "hours must be > 0 (got: $hours)"
@@ -307,10 +315,10 @@ loop_extend_mode() {
 
   # ------------------------------------------------------------------
   # Step 3: preview gate
-  #   - get unit duration + fps to compute boundary frame
-  #   - run seam_check on the boundary
+  #   - get unit duration (for tiling math) and EXACT packet count (for seam_check)
+  #   - run seam_check on the wrap boundary using the real packet count
   #   - print verdict, estimated output, preview path
-  #   - if NOT SEAMLESS: print pingpong recommendation
+  #   - if NOT SEAMLESS and not already on pingpong: print recommendation
   #   - prompt only if stdin is TTY and --yes not set
   # ------------------------------------------------------------------
   local unit_dur
@@ -320,26 +328,19 @@ loop_extend_mode() {
     -of default=noprint_wrappers=1:nokey=1 \
     "$unit_file")" || { _cleanup_loop_tmp; return 1; }
 
-  # fps from unit for frame index calculation
-  local unit_fps
-  unit_fps="$("$FFPROBE" -v error \
-    -select_streams v:0 \
-    -show_entries stream=r_frame_rate \
-    -of default=noprint_wrappers=1:nokey=1 \
-    "$unit_file" 2>/dev/null || echo "30/1")"
-  # evaluate fractional fps (e.g. "30000/1001") via awk
-  local unit_fps_num
-  unit_fps_num="$(awk -v r="$unit_fps" 'BEGIN {
-    n=r; d=1
-    if (r ~ /\//) { split(r,a,"/"); n=a[1]; d=a[2] }
-    printf "%d", n/d + 0.5
-  }')"
-  [[ "$unit_fps_num" -gt 0 ]] || unit_fps_num=30
-
-  # boundary frame: first frame of the second copy = unit_frames + 1 (1-based seam_check)
+  # Derive the boundary frame from the ACTUAL video packet count, not from
+  # duration * fps arithmetic.  The float-rounding in duration*fps can be off
+  # by ±1, which points the probe mid-second-copy rather than at the real cut
+  # and can report a wrong verdict (e.g. SOFT on a truly seamless pingpong).
+  # Packet count is exact — identical to what assert_seam_ok / test 2 use.
   local unit_frames
-  unit_frames="$(awk -v d="$unit_dur" -v fps="$unit_fps_num" \
-    'BEGIN { printf "%d", d * fps + 0.5 }')"
+  unit_frames="$("$FFPROBE" -v error \
+    -select_streams v:0 \
+    -count_packets \
+    -show_entries stream=nb_read_packets \
+    -of default=noprint_wrappers=1:nokey=1 \
+    "$unit_file")"
+  [[ "$unit_frames" =~ ^[0-9]+$ ]] || { _cleanup_loop_tmp; return 1; }
 
   # Need at least frame 12 for seam_check to produce a meaningful baseline.
   local verdict=""
@@ -369,7 +370,8 @@ loop_extend_mode() {
     printf '  estimated output: %s s, ~%s MB\n' "$target_secs" "$est_mb"
     printf '  seam preview clip: %s\n' "$preview_file"
 
-    if [[ "$verdict" != "SEAMLESS" ]]; then
+    # Only suggest pingpong when not already using it (avoid confusing tip-on-pingpong)
+    if [[ "$verdict" != "SEAMLESS" && "$LOOP_STRATEGY" != "pingpong" ]]; then
       printf '  tip: for a truly seamless loop try --loop pingpong (note: it reverses motion on alternate passes)\n'
     fi
   else
