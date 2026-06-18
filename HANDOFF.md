@@ -31,38 +31,37 @@ Extend the existing bash `make-video` (still→long silent video) into a unified
 - **`seam_check`** (`lib/seam.sh`) — runtime reporter: boundary-vs-baseline PSNR → SEAMLESS/SOFT/VISIBLE; teeth-tested (hard cut → VISIBLE); rejects FRAME<12 (degenerate-baseline false-pass guard).
 - **PRD-2 (loop-extend mode)** — single video clip → `loop_unit` → concat-copy `-t` to ~exact target (Δ<0.1s real) → PREVIEW GATE (`seam_check` at the real wrap frame via `nb_read_packets`, prints verdict + emits a seam-preview clip; recommends pingpong only when verdict≠SEAMLESS AND not already pingpong; never hangs in non-TTY/`--yes`). Native audio looped through the unit; `--audio` replaces. `--zoom` rejected for video. Temp cleanup on all exit paths.
 
-All committed; `bats tests/` = **98/98 green**. Run: `export PATH="/opt/homebrew/bin:$PATH"; bats tests/`.
+All committed; `bats tests/` = **130/130 green** (run serially). Run: `export PATH="/opt/homebrew/bin:$PATH"; bats tests/`.
 
 ## Key decisions / lessons
 - **Seam strategy is evidence-based** (red-team, architecture §3.2): crossfade hides the flash but leaves a content jump (28.6 dB); pingpong is truly seamless (≈baseline) but reverses motion; loop-native source is the third option. `--loop {crossfade|pingpong|native}`.
-- **Tests must have teeth**: two separate review rounds caught tests that passed on broken code (Task 0 seam helper; Task 4 seam test). Every seam/quality test now needs a negative control proving it fails on the bad case.
-- PRD-4 (multi-clip mixer) is gated to ship LAST (slow full re-encode).
+- **Tests must have teeth**: review rounds across all 5 PRDs caught tests that passed on broken code. Every seam/quality test now needs a negative control proving it fails on the bad case.
+- PRD-4 (multi-clip mixer) shipped LAST as gated (slow full re-encode), behind the estimate + preview + go/no-go gate.
+- **mix render scales with UNIQUE clips/seams, not length**: bodies and dissolves are cached by filename, so a repeated clip/pair is built once — same O(1)-in-length spirit as the slideshow encode-once+concat-copy trick.
 
 ## Remaining (resume here)
-**All 5 PRDs implemented.** Open items:
-- **Merge `feat/prd-4-mixer` → `main`** when reviewed.
-- **Real-smoke `--mix`** on the operator's actual clip folder (bats covers it on generated media; still blocked on the unmounted SSD for the real assets).
-- **Drive sync** — `/Volumes/1TB SSD/ImageToVideo/` still has the OLD tool; run `./sync-to-drive.sh` once the SSD is reconnected.
+**All 5 PRDs implemented AND merged to `main` (pushed).** Only hardware-blocked items left:
+- **Real-smoke `--mix`** on the operator's actual clip folder — bats covers it on generated media, but per DoD that's not a substitute for real footage. Blocked on the unmounted SSD.
+- **Drive sync** — `/Volumes/1TB SSD/ImageToVideo/` still has the OLD tool; run `./sync-to-drive.sh` once the SSD is reconnected (copies `make-video` + `lib/` + `README.txt`; bundled ffmpeg already on the drive).
 - **Optional polish (deferred, non-blocking):** mix render-time estimate is a deliberately wide "rough" band — tighten once real-hardware numbers exist; `--keep-native` layering is not yet wired for `--mix` (mix `--audio` replaces only).
 
-## Definition of Done — status (as of 67988ae)
-- [x] Code complete for PRD-5 + PRD-2; every engine + mode implemented
-- [x] Tests: **98/98 bats green**; each engine/mode unit + integration tested with negative controls (teeth)
-- [x] Lint: `shellcheck -S warning make-video lib/*.sh setup-mac-arm64.sh` → clean (exit 0)
+## Definition of Done — status (as of 1aa53d4, main)
+- [x] Code complete — all 5 PRDs (still+audio, loop-extend, clip+soundtrack, slideshow, mix); every engine + mode implemented
+- [x] Tests: **130/130 bats green** (run serially — the temp-leak count test is flaky under concurrent suite runs sharing $TMPDIR); each engine/mode unit + integration tested with negative controls (teeth). PRD-4 adds 9 sequencer unit + 11 mix integration tests.
+- [x] Lint: `shellcheck -s bash lib/sequencer.sh lib/mixer.sh` clean (no errors); style warnings only, consistent with existing libs
 - [x] Security: no secrets committed; ffmpeg/ffprobe binaries gitignored (reproduce via `setup-mac-arm64.sh`)
-- [x] Verification: every task passed two-stage review (spec + code-quality) with fix loops; reviewers re-ran tests
-- [x] Production smoke: PRD-5 real-smoked on the actual 4K fine-art TIFF + audio; PRD-2 real-smoked on a motion clip with `--loop pingpong` (preview reported SEAMLESS, output 36s h264+aac)
-- [x] Docs current: README.md, README.txt, architecture, 5 PRDs, implementation plan, this HANDOFF
-- [x] Branch pushed to origin
-- [x] **Merged to `main`** and pushed (merge commit; `main` at `345cd06`+).
-- [ ] **Drive copy NOT yet synced** — the external SSD was unmounted at ship time. When it's reconnected, run `./sync-to-drive.sh` (defaults to `/Volumes/1TB SSD/ImageToVideo`) to copy `make-video` + `lib/` + `README.txt` (bundled ffmpeg already on the drive), then smoke from the drive with a clean PATH.
+- [x] Verification: PRD-4 reviewed by the reviewer agent — 5 findings fixed (set -u empty-array crash, VERIFY temp-dir leak, crude size estimate, missing --order validation, dead cache arrays); suite re-run green after fixes
+- [x] Production smoke: PRD-5 real-smoked on a 4K fine-art TIFF + audio; PRD-2 on a motion clip with `--loop pingpong`. **PRD-4 `--mix` NOT yet real-smoked on operator footage (SSD unmounted)** — bats is the available smoke.
+- [x] Docs current: README.md (technical), README.txt (rewritten plain-language guide, all 5 modes), make-video header, docs/prds/README.md (status → all 5 implemented), this HANDOFF
+- [x] **Merged to `main`** and pushed: PRD-4 merge `5183638`, docs `1aa53d4`. `origin/main` == local, clean tree.
+- [ ] **Drive copy NOT yet synced** — SSD unmounted at ship time. When reconnected, run `./sync-to-drive.sh`, then smoke from the drive with a clean PATH.
 - N/A: registry-membership (no registry pattern in this project)
 
 ## Recurring lesson (worth a `/learn`)
-The review gates caught **7 bugs that all had green tests**: silent-pass seam helper, toothless seam test, 48 kHz sample-rate click, toothless loudness test, temp-dir leak, preview gate reading the wrong frame, circular pingpong tip. The pattern: a green test isn't a passing test unless it has a **negative control** that fails on the broken case. Every seam/loudness/quality test in this repo now ships with one.
+The review gates have now caught **12 bugs across the 5 PRDs that all had green (or absent) tests**: silent-pass seam helper, toothless seam test, 48 kHz sample-rate click, toothless loudness test, temp-dir leak (twice — loop-extend + mix VERIFY), preview gate reading the wrong frame, circular pingpong tip, slideshow per-frame re-encode perf bug, `set -u` empty-array crash, crude size estimate, missing flag validation. The pattern: a green test isn't a passing test unless it has a **negative control** that fails on the broken case. Every seam/loudness/quality test in this repo ships with one.
 
 ## Resume instructions
-1. `cd ~/github/ImageToVideo && git checkout feat/audio-and-transitions && git pull`
-2. `export PATH="/opt/homebrew/bin:$PATH" && bats tests/` → expect 53/53.
-3. Continue subagent-driven from Task 5 (full text in `docs/plans/2026-06-18-make-video-implementation.md`). Keep the two-stage review + negative-control discipline.
-4. The deployed tool + bundled ffmpeg live on the friend's drive at `/Volumes/1TB SSD/ImageToVideo/` (binaries gitignored; reproduce with `setup-mac-arm64.sh`). Re-sync the drive copy after the feature lands.
+1. `cd ~/github/ImageToVideo && git checkout main && git pull`  (everything is on main now)
+2. `bats tests/` → expect **130/130**. Run it ONCE (serially) — running multiple `bats tests/` concurrently makes the temp-dir-count test (#74) false-fail on shared $TMPDIR.
+3. When the **1TB SSD** is mounted: `./sync-to-drive.sh` to push the tool + new README.txt to the drive, then real-smoke `--mix` on the operator's actual clips and confirm it runs from the drive with a clean PATH.
+4. Patterns/specs for any further work live in `docs/plans/2026-06-18-make-video-*.md` and `docs/prds/`. Keep the review + negative-control discipline.
