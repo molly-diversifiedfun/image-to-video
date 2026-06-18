@@ -61,6 +61,7 @@ _audio_get_duration() {
 _audio_collect_files() {
   local dir="$1"
   local found=0
+  # Flat glob only — subdirectories are intentionally excluded (no recursion).
   for f in "$dir"/*; do
     [[ -f "$f" ]] || continue
     local base
@@ -120,6 +121,10 @@ _audio_build_playlist() {
       --shuffle) do_shuffle=1; shift ;;
       --seed)
         seed="${2:?--seed requires a value}"
+        if [[ ! "$seed" =~ ^[0-9]+$ ]]; then
+          echo "_audio_build_playlist: --seed must be a non-negative integer, got: '${seed}'" >&2
+          return 1
+        fi
         do_shuffle=1
         shift 2
         ;;
@@ -142,6 +147,7 @@ _audio_build_playlist() {
   ordered_files="$(echo "$file_list" | sort)"
 
   if [[ "$do_shuffle" -eq 1 ]]; then
+    # If no --seed given, falls back to $$; concurrent same-PID runs will coincide.
     local effective_seed="${seed:-$$}"
     ordered_files="$(echo "$ordered_files" | _audio_shuffle_lines "$effective_seed")"
   fi

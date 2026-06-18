@@ -231,6 +231,106 @@ _rms_diff() {
 }
 
 # ---------------------------------------------------------------------------
+# Test 4b: Per-track loudness consistency — each segment within ±3 LUFS of each other
+#
+# Rationale: Test 4 proves the integrated loudness of the WHOLE output is ≈-16,
+# but it cannot distinguish whether per-track loudnorm is working or whether the
+# global loudnorm pass at the end is masking large jumps between songs.  This
+# test uses amplitude-DISPARATE fixtures that would differ by ~40 LUFS without
+# per-track normalisation, so it would FAIL if per-track loudnorm were disabled.
+#
+# Fixtures:
+#   01_quiet.wav : sine 440 Hz, volume=0.01  → raw input_i ≈ -61.75 LUFS
+#   02_loud.wav  : sine 660 Hz, volume=1.0   → raw input_i ≈ -21.75 LUFS
+#   raw disparity: ≈ 40 LUFS (>> 3 LUFS threshold)
+#
+# Method:
+#   1. audio_build the dir to AAC, decode to PCM.
+#   2. Extract segment 1 (0–2s, well inside first track, before crossfade).
+#   3. Extract segment 2 (4–6s, well inside second track, after crossfade).
+#   4. Measure input_i of each segment via loudnorm analysis.
+#   5. Assert |seg1_lufs - seg2_lufs| <= 3.
+#
+# Negative proof: without per-track loudnorm the raw segments differ by ~40 LUFS,
+# which is > 13× the 3 LUFS threshold — so the test has teeth.
+# ---------------------------------------------------------------------------
+
+@test "audio_build dir: per-segment loudness within ±3 LUFS of each other (per-track loudnorm works)" {
+  local dir="$WORK_DIR/tracks"
+  local out="$WORK_DIR/out.aac"
+  mkdir -p "$dir"
+
+  # Quiet track: sine 440 Hz attenuated to 1% amplitude (-40 dBFS)
+  # raw integrated loudness ≈ -61.75 LUFS
+  "$FFMPEG" -nostdin -loglevel error -y \
+    -f lavfi -i "sine=frequency=440:sample_rate=44100" \
+    -t 3 -af "volume=0.01" -c:a pcm_s16le "$dir/01_quiet.wav"
+
+  # Loud track: sine 660 Hz at full amplitude
+  # raw integrated loudness ≈ -21.75 LUFS
+  "$FFMPEG" -nostdin -loglevel error -y \
+    -f lavfi -i "sine=frequency=660:sample_rate=44100" \
+    -t 3 -c:a pcm_s16le "$dir/02_loud.wav"
+
+  run audio_build "$dir" 8 "$out"
+  [ "$status" -eq 0 ]
+  [ -f "$out" ]
+
+  # Decode AAC → PCM for exact atrim-based segment extraction
+  local pcm="$WORK_DIR/out.wav"
+  "$FFMPEG" -nostdin -loglevel error -y -i "$out" -c:a pcm_s16le "$pcm"
+
+  # Segment 1: 0–2s (first 2 seconds of first track; well before the 1s crossfade zone)
+  local seg1="$WORK_DIR/seg1.wav"
+  "$FFMPEG" -nostdin -loglevel error -y \
+    -i "$pcm" \
+    -filter_complex "[0:a]atrim=end=2,asetpts=PTS-STARTPTS[out]" \
+    -map "[out]" -c:a pcm_s16le "$seg1"
+
+  # Segment 2: 4–6s (well inside second track, after the ~1s crossfade zone at 3s)
+  local seg2="$WORK_DIR/seg2.wav"
+  "$FFMPEG" -nostdin -loglevel error -y \
+    -i "$pcm" \
+    -filter_complex "[0:a]atrim=start=4:end=6,asetpts=PTS-STARTPTS[out]" \
+    -map "[out]" -c:a pcm_s16le "$seg2"
+
+  # Measure integrated loudness of each segment
+  local lufs_json1 lufs_json2 lufs1 lufs2
+  lufs_json1="$("$FFMPEG" -nostdin -i "$seg1" \
+    -af "loudnorm=I=-16:TP=-1.5:LRA=11:print_format=json" -f null - 2>&1)"
+  lufs_json2="$("$FFMPEG" -nostdin -i "$seg2" \
+    -af "loudnorm=I=-16:TP=-1.5:LRA=11:print_format=json" -f null - 2>&1)"
+
+  lufs1="$(echo "$lufs_json1" | awk '/"input_i"/{
+    gsub(/.*"input_i" *: *"/, ""); gsub(/".*/, ""); print; exit
+  }')"
+  lufs2="$(echo "$lufs_json2" | awk '/"input_i"/{
+    gsub(/.*"input_i" *: *"/, ""); gsub(/".*/, ""); print; exit
+  }')"
+
+  [[ "$lufs1" =~ ^-?[0-9] ]] || {
+    echo "per-segment loudness test: could not parse seg1 lufs ('${lufs1}')" >&2; return 1
+  }
+  [[ "$lufs2" =~ ^-?[0-9] ]] || {
+    echo "per-segment loudness test: could not parse seg2 lufs ('${lufs2}')" >&2; return 1
+  }
+
+  # Both segments must be within ±3 LUFS of each other
+  local ok
+  ok="$(awk -v a="$lufs1" -v b="$lufs2" 'BEGIN {
+    diff = a - b; if (diff < 0) diff = -diff
+    print (diff <= 3) ? "ok" : "fail"
+  }')"
+
+  if [[ "$ok" != "ok" ]]; then
+    echo "per-segment loudness test: segments differ by more than 3 LUFS —" \
+         "seg1=${lufs1} LUFS, seg2=${lufs2} LUFS" \
+         "(raw disparity without per-track loudnorm would be ~40 LUFS)" >&2
+    return 1
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # Test 5 (NEGATIVE CONTROL): Hard PCM concat (no crossfade) MUST fail seam check
 #
 # We build a bad playlist join: two PCM copies of a 443 Hz / 1.3s source

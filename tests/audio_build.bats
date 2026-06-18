@@ -466,7 +466,10 @@ _rms_diff() {
 }
 
 # ---------------------------------------------------------------------------
-# Test 7: directory SRC → returns non-zero (stub for future folder branch)
+# Test 7: empty directory SRC → returns non-zero
+#
+# The folder branch is now implemented; an empty dir (no audio files) correctly
+# returns non-zero because there is nothing to build a playlist from.
 # ---------------------------------------------------------------------------
 
 @test "audio_build: directory SRC → non-zero exit (stub for folder branch)" {
