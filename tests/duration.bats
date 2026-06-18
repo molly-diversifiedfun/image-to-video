@@ -10,6 +10,9 @@
 
 REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 
+# --separate-stderr requires bats 1.5+
+bats_require_minimum_version 1.5.0
+
 setup() {
   source "$REPO_ROOT/lib/duration.sh"
 }
@@ -67,9 +70,39 @@ setup() {
   [ "$status" -ne 0 ]
 }
 
-@test "parse_duration: error cases print to stderr, not stdout" {
-  # Capture only stderr; stdout must be empty on error
-  local stderr_out
-  stderr_out="$(parse_duration 0 2>&1 1>/dev/null)" || true
-  [ -n "$stderr_out" ]
+@test "parse_duration: error message goes to stderr, stdout is empty" {
+  # --separate-stderr (bats 1.5+): $output = stdout only, $stderr = stderr only
+  run --separate-stderr parse_duration 0
+  [ "$status" -ne 0 ]
+  [ -z "$output" ]
+  [ -n "$stderr" ]
+}
+
+# ---------------------------------------------------------------------------
+# Additional edge cases: malformed numbers → non-zero
+# ---------------------------------------------------------------------------
+
+@test "parse_duration: 1.2.3 (double-dot) → non-zero exit status" {
+  run parse_duration "1.2.3"
+  [ "$status" -ne 0 ]
+}
+
+@test "parse_duration: 1e3 (scientific notation) → non-zero exit status" {
+  run parse_duration "1e3"
+  [ "$status" -ne 0 ]
+}
+
+@test "parse_duration: +5 (leading plus) → non-zero exit status" {
+  run parse_duration "+5"
+  [ "$status" -ne 0 ]
+}
+
+@test "parse_duration: space-padded ' 3 ' → non-zero exit status" {
+  run parse_duration " 3 "
+  [ "$status" -ne 0 ]
+}
+
+@test "parse_duration: .5 (leading dot, no leading zero) → non-zero exit status" {
+  run parse_duration ".5"
+  [ "$status" -ne 0 ]
 }

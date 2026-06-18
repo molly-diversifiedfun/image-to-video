@@ -100,6 +100,28 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
+# Additional edge cases
+# ---------------------------------------------------------------------------
+
+@test "classify_input: directory with only junk (._x.png + .DS_Store, no real media) → unknown" {
+  local dir="$WORK_DIR/junk_only"
+  mkdir -p "$dir"
+  printf "junk\n" > "$dir/._x.png"
+  printf "junk\n" > "$dir/.DS_Store"
+  run classify_input "$dir"
+  [ "$status" -eq 0 ]
+  [ "$output" = "unknown" ]
+}
+
+@test "classify_input: no-extension file (Makefile) → unknown" {
+  local f="$WORK_DIR/Makefile"
+  printf "all:\n\techo hi\n" > "$f"
+  run classify_input "$f"
+  [ "$status" -eq 0 ]
+  [ "$output" = "unknown" ]
+}
+
+# ---------------------------------------------------------------------------
 # Non-existent path → non-zero return
 # ---------------------------------------------------------------------------
 

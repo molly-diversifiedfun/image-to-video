@@ -14,7 +14,10 @@
 #   - The first media file found (sorted) determines the classification.
 #   - If no media file exists in the directory, echoes unknown.
 #
-# Requires: bash 3.2+, awk (no bc, no external deps beyond coreutils)
+# Dependencies: bash 3.2+, tr, find, sort (GNU coreutils or BSD coreutils on
+# macOS).  sort -z (NUL-delimited sort) is used for spaces-in-paths safety;
+# both GNU coreutils sort and macOS BSD sort support this flag.  LC_ALL=C is
+# set to ensure consistent byte-order sorting regardless of locale.
 
 # ---------------------------------------------------------------------------
 # _classify_ext EXT
@@ -51,8 +54,8 @@ classify_input() {
     local ext="${basename##*.}"
     # If there's no dot, ext == basename (no extension)
     [[ "$ext" == "$basename" ]] && ext=""
-    # Lowercase via awk (bash 3.2-safe; ${var,,} requires bash 4+)
-    ext="$(printf '%s' "$ext" | awk '{ print tolower($0) }')"
+    # Lowercase via tr (clearer than awk; bash 3.2-safe — ${var,,} needs 4+)
+    ext="$(printf '%s' "$ext" | tr '[:upper:]' '[:lower:]')"
     local kind
     kind="$(_classify_ext "$ext")"
     if [[ -n "$kind" ]]; then
@@ -65,7 +68,8 @@ classify_input() {
 
   # --- Directory ---
   if [[ -d "$path" ]]; then
-    # Iterate sorted filenames, skipping dotfiles and ._* AppleDouble files
+    # Iterate sorted filenames, skipping dotfiles and ._* AppleDouble files.
+    # LC_ALL=C ensures consistent byte-order sort across locales.
     local first_kind=""
     while IFS= read -r -d '' entry; do
       local fname="${entry##*/}"
@@ -75,14 +79,14 @@ classify_input() {
       [[ -f "$entry" ]] || continue
       local ext="${fname##*.}"
       [[ "$ext" == "$fname" ]] && ext=""
-      ext="$(printf '%s' "$ext" | awk '{ print tolower($0) }')"
+      ext="$(printf '%s' "$ext" | tr '[:upper:]' '[:lower:]')"
       local kind
       kind="$(_classify_ext "$ext")"
       if [[ -n "$kind" ]]; then
         first_kind="$kind"
         break
       fi
-    done < <(find "$path" -maxdepth 1 -mindepth 1 -print0 | sort -z)
+    done < <(find "$path" -maxdepth 1 -mindepth 1 -print0 | LC_ALL=C sort -z)
 
     if [[ "$first_kind" == "image" ]]; then
       echo "image-dir"

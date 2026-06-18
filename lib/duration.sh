@@ -21,13 +21,15 @@ parse_duration() {
     return 1
   fi
 
-  # Validate: numeric and positive using awk
+  # Validate: numeric and positive using awk.
+  # Accepted form: optional leading minus, one or more digits, optional dot +
+  # one or more digits.  Leading-dot forms like ".5" are rejected — callers
+  # must write "0.5".  Scientific notation (1e3) and multi-dot (1.2.3) are also
+  # rejected by this regex.
   # awk prints 1 if valid positive number, 0 otherwise.
   local valid
   valid="$(awk -v h="$hours" 'BEGIN {
-    # Check numeric: attempt arithmetic; if it produces 0 for a non-numeric
-    # string, the regex will catch it.  Use a regex to be safe.
-    if (h ~ /^-?[0-9]+(\.[0-9]+)?$/ || h ~ /^-?\.[0-9]+$/) {
+    if (h ~ /^-?[0-9]+(\.[0-9]+)?$/) {
       print (h + 0 > 0) ? "1" : "0"
     } else {
       print "0"
