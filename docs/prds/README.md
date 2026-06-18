@@ -17,4 +17,4 @@ Status: design approved 2026-06-18, then **red-teamed** (pre-mortem) the same da
 2. A non-technical operator can't spot a subtly-broken multi-hour output — added a `seam-check` auto-QC + a PREVIEW go/no-go gate to the SOP (architecture §4).
 3. The slow/fragile mixer (PRD-4) is gated to ship last, behind the four fast modes (architecture §7).
 
-Not yet implemented. Implementation planning is the next step.
+**Status: all 5 PRDs implemented (2026-06-18).** PRD-1/2/3/5 are the fast modes; PRD-4 (`mix`) shipped last per the architecture's gating, fully re-encoding behind the estimate + preview + go/no-go gate. Test suite: 130 bats tests across the five modes.

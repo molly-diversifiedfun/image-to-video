@@ -1,8 +1,10 @@
 # HANDOFF — make-video build (audio + transitions)
 
 **Date:** 2026-06-18
-**Branches (pushed, awaiting merge to main):** `feat/prd-1-slideshow`, `chore/brew-setup-docs`. PRD-3 already merged to main at `2695772`.
-**Milestones:** PRD-5 (photo+audio), PRD-2 (seamless loop-extend), PRD-3 (clip+soundtrack), AND PRD-1 (slideshow) COMPLETE. **4 of 5 shipped.** 110/110 tests. Only PRD-4 (multi-clip mixer) remains.
+**Branch:** `feat/prd-4-mixer` (PRD-4 work; merge when ready). Prior PRDs merged to `main` (`c0b5b38`).
+**Milestones:** PRD-5 (photo+audio), PRD-2 (seamless loop-extend), PRD-3 (clip+soundtrack), PRD-1 (slideshow), AND PRD-4 (multi-clip mixer) COMPLETE. **ALL 5 SHIPPED.** 130/130 tests.
+
+> **PRD-4 mix (2026-06-18):** Folder of CLIPS → ONE long mixed video. Two new libs: `lib/sequencer.sh::sequence_clips` (pure logic — seeded shuffle, **no clip adjacent to itself**, reshuffle-per-pass, fill-to-target via `timeline = Σdur − (n−1)·xfade`, `--order name` for deterministic; 9 unit tests) and `lib/mixer.sh::mix_clips` (normalize mixed sources to one res/fps → body+dissolve segments → concat-copy; bodies/dissolves cached by filename so render cost scales with UNIQUE clips/seams, not length). Trigger: `--mix HOURS` on a directory + `--out FILE`. Flags: `--xfade`(1.5) `--order shuffle|name` `--seed` `--clip-secs N` `--fill` `--hardcut` `--audio`. The ONLY re-encoding mode — `mix_mode` in make-video prints a size/render-time estimate, renders a bounded preview (first ~4 junctions via `MIX_MAX_CLIPS`) + seam-check at the first junction, then go/no-go gate (auto-proceeds on `--yes`/non-TTY). Teeth: dissolve-vs-hardcut PSNR control (2-clip cut at total_frames/2), seed reproduces order, no-adjacent-repeat scan, `--audio` replace (tone present/absent), min-duration rejection, silent-source gets a synth track. **Review (reviewer agent) caught & fixed: `set -u` empty-array crash (`tflag[@]`), VERIFY-pipeline temp leak, crude size estimate (now extrapolates first-clip bitrate), missing `--order` validation, dead cache arrays.** On branch `feat/prd-4-mixer`.
 
 > **PRD-1 slideshow (2026-06-18):** New `lib/slideshow.sh::xfade_join` — a folder of images → ONE long video, each held then crossfaded into the next. Trigger: `--slideshow` on a directory (default folder behavior = batch, preserved). Flags: `--each HOURS`, `--xfade`, `--shuffle`/`--seed`, `--fill`, `--audio`. Total = n·each − (n−1)·xfade. Fast: holds use the encode-once+concat-copy trick (`_slideshow_build_hold`, mirrors `make_static`) so render time is O(1) in hold length — **review caught a perf bug where holds re-encoded every frame (17.9s vs 4.2s for a 120s hold @1080p); fixed.** Teeth tests: dissolve-not-a-hard-cut with a hard-cut negative control (PSNR ~40 dB dissolve vs ~12 dB hard cut), junk-file skip via duration discrimination, long-hold (>30s) test forcing the concat-copy path. On branch `feat/prd-1-slideshow`; merge when ready.
 
@@ -37,12 +39,11 @@ All committed; `bats tests/` = **98/98 green**. Run: `export PATH="/opt/homebrew
 - PRD-4 (multi-clip mixer) is gated to ship LAST (slow full re-encode).
 
 ## Remaining (resume here)
-Phases 0–3 DONE: shared core + PRD-5 (photo+audio) + PRD-2 (seamless loop-extend). 2 of 5 features shipped.
-- **PRD-3** (clip + soundtrack) — THIN: it's PRD-2's loop-extend video + the `--audio` path already wired (file→loop, folder→playlist), with audio REPLACE as the default for clips (drone hum unwanted) and `--keep-native` to layer. Mostly a default-flip + a couple tests. Likely the next quick win.
-- **PRD-1** (slideshow) — new `xfade_join` engine: chain per-image still segments (each held N hours) with crossfades into ONE video; `--each`, `--shuffle`; few seams so fast.
-- **PRD-4** (multi-clip mixer) — LAST: `clip_sequencer` (shuffle, no adjacent repeat, `--seed`) + normalize-to-project + `xfade_join` chain (full GPU re-encode, slow) + mandatory preview + `--hardcut` fast fallback.
-
-NOTE: not yet merged to `main`; drive copy at `/Volumes/1TB SSD/ImageToVideo/` still has the OLD silent-only tool — re-sync (lib/ + new make-video) when ready to hand off.
+**All 5 PRDs implemented.** Open items:
+- **Merge `feat/prd-4-mixer` → `main`** when reviewed.
+- **Real-smoke `--mix`** on the operator's actual clip folder (bats covers it on generated media; still blocked on the unmounted SSD for the real assets).
+- **Drive sync** — `/Volumes/1TB SSD/ImageToVideo/` still has the OLD tool; run `./sync-to-drive.sh` once the SSD is reconnected.
+- **Optional polish (deferred, non-blocking):** mix render-time estimate is a deliberately wide "rough" band — tighten once real-hardware numbers exist; `--keep-native` layering is not yet wired for `--mix` (mix `--audio` replaces only).
 
 ## Definition of Done — status (as of 67988ae)
 - [x] Code complete for PRD-5 + PRD-2; every engine + mode implemented

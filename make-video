@@ -34,6 +34,14 @@
 #                    replacing it. Requires --audio. If the clip has no native
 #                    audio track, this flag is silently ignored (replace path used).
 #
+# Mix mode (folder of CLIPS → one long mixed video, PRD-4):
+#     ./make-video CLIPS_DIR --mix HOURS --out FILE [--xfade S] [--order name]
+#                  [--seed N] [--clip-secs N] [--fill] [--hardcut] [--audio P] [--yes]
+#   Sequences the clips to fill HOURS, crossfading every junction, never placing
+#   a clip back-to-back with itself, reshuffling each pass. This mode RE-ENCODES
+#   (slow): it prints a size/time estimate, renders a short preview, and asks
+#   go/no-go before the full render. --hardcut skips crossfades (fast fallback).
+#
 # HOURS may be fractional (0.5 = 30 min, 0.0167 ≈ 1 min).
 # Point at a FOLDER instead of a file to batch the whole directory in parallel.
 
@@ -85,6 +93,10 @@ source "$SCRIPT_DIR/lib/loop.sh"
 source "$SCRIPT_DIR/lib/seam.sh"
 # shellcheck source=lib/slideshow.sh
 source "$SCRIPT_DIR/lib/slideshow.sh"
+# shellcheck source=lib/sequencer.sh
+source "$SCRIPT_DIR/lib/sequencer.sh"
+# shellcheck source=lib/mixer.sh
+source "$SCRIPT_DIR/lib/mixer.sh"
 
 preflight() {
   [[ -n "$FFMPEG" && -n "$FFPROBE" ]] && return 0
@@ -228,6 +240,14 @@ SLIDESHOW_SHUFFLE=0         # slideshow: 1 = shuffle image order
 SLIDESHOW_SEED="$$"         # slideshow: seed for shuffle
 SLIDESHOW_FILL=0            # slideshow: 1 = crop-to-fill; 0 = letterbox (default)
 EACH_HOURS=""               # slideshow: per-image hold in hours (alias for positional HOURS)
+MIX=0                       # 1 = mix mode (folder of clips → one long mixed video, PRD-4)
+MIX_XFADE="1.5"             # mix: crossfade seconds at every junction (default 1.5)
+MIX_SEED="$$"               # mix: shuffle seed
+MIX_ORDER="shuffle"         # mix: shuffle (default) | name (sorted, deterministic)
+MIX_CLIP_SECS=0             # mix: cap each clip to N seconds (0 = whole clip)
+MIX_FILL=0                  # mix: 1 = crop-to-fill; 0 = letterbox (default)
+MIX_HARDCUT=0               # mix: 1 = concat with NO crossfade (fast preview/fallback)
+MIX_HOURS=""                # mix: target length in hours (alias for positional HOURS)
 POS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -243,14 +263,22 @@ while [[ $# -gt 0 ]]; do
         crossfade|pingpong|native) LOOP_STRATEGY="$2"; shift 2;;
         *) die "unknown --loop value '${2}' (use crossfade|pingpong|native)";;
       esac;;
-    --xfade)    LOOP_XFADE="$2"; SLIDESHOW_XFADE="$2"; shift 2;;
+    --xfade)    LOOP_XFADE="$2"; SLIDESHOW_XFADE="$2"; MIX_XFADE="$2"; shift 2;;
     --yes)         LOOP_YES=1;        shift;;
     --keep-native) KEEP_NATIVE=1;    shift;;
     --slideshow)   SLIDESHOW=1;       shift;;
+    --mix)         MIX=1;             shift;;
     --each)        EACH_HOURS="$2";   shift 2;;
     --shuffle)     SLIDESHOW_SHUFFLE=1; shift;;
-    --seed)        SLIDESHOW_SEED="$2"; SLIDESHOW_SHUFFLE=1; shift 2;;
-    --fill)        SLIDESHOW_FILL=1;  shift;;
+    --seed)        SLIDESHOW_SEED="$2"; SLIDESHOW_SHUFFLE=1; MIX_SEED="$2"; shift 2;;
+    --fill)        SLIDESHOW_FILL=1;  MIX_FILL=1; shift;;
+    --order)
+      case "$2" in
+        shuffle|name) MIX_ORDER="$2"; shift 2;;
+        *) die "unknown --order value '${2}' (use shuffle|name)";;
+      esac;;
+    --clip-secs)   MIX_CLIP_SECS="$2"; shift 2;;
+    --hardcut)     MIX_HARDCUT=1;     shift;;
     -h|--help)  sed -n '2,40p' "$0"; exit 0;;
     -*)         die "unknown flag: $1";;
     *)          POS+=("$1");          shift;;
@@ -264,6 +292,11 @@ done
 # --slideshow on a single file (not a directory) is invalid.
 if [[ "$SLIDESHOW" -eq 1 && ${#POS[@]} -ge 1 && -f "${POS[0]}" ]]; then
   die "--slideshow requires a directory input, not a single file"
+fi
+
+# --mix on a single file (not a directory) is invalid.
+if [[ "$MIX" -eq 1 && ${#POS[@]} -ge 1 && -f "${POS[0]}" ]]; then
+  die "--mix requires a directory of clips, not a single file"
 fi
 
 # --zoom with --slideshow is invalid.
@@ -292,6 +325,18 @@ if [[ "$SLIDESHOW" -eq 1 ]]; then
   fi
 fi
 
+# Resolve MIX_HOURS (target length) from positional for mix mode.
+if [[ "$MIX" -eq 1 ]]; then
+  [[ "$SLIDESHOW" -eq 0 ]] || die "--mix and --slideshow are mutually exclusive"
+  [[ "$ZOOM_PCT" == "0" ]] || die "--zoom is not supported in mix mode"
+  if [[ -z "$MIX_HOURS" ]]; then
+    [[ ${#POS[@]} -ge 1 ]] && { MIX_HOURS="${POS[0]}"; POS=("${POS[@]:1}"); } \
+      || die "--mix requires a target HOURS"
+  fi
+fi
+
+export MIX_XFADE MIX_SEED MIX_ORDER MIX_CLIP_SECS MIX_FILL MIX_HARDCUT
+
 # Auto-pick parallelism by mode (override with --jobs):
 #   zoom  → the zoompan filter is ~single-core and the GPU encoder is shared,
 #           so run several at once to fill cores (but not so many the GPU chokes).
@@ -302,9 +347,9 @@ if [[ -z "$JOBS" ]]; then
   else JOBS=$(( c >= 8 ? 4 : (c >= 4 ? 2 : 1) )); fi
 fi
 
-# In slideshow mode, OUTDIR is the output FILE path (not a directory).
+# In slideshow and mix modes, OUTDIR is the output FILE path (not a directory).
 # Skip the mkdir-p so we don't accidentally create "out.mp4" as a directory.
-if [[ "$SLIDESHOW" -eq 0 && -n "$OUTDIR" ]]; then
+if [[ "$SLIDESHOW" -eq 0 && "$MIX" -eq 0 && -n "$OUTDIR" ]]; then
   mkdir -p "$OUTDIR"
 fi
 export ZOOM_PCT                 # propagate to re-invoked single-mode children
@@ -548,6 +593,84 @@ loop_extend_mode() {
     "$audio_label" "$out"
 }
 
+# ---------------------------------------------------------------------------
+# mix_mode DIR HOURS OUT  (PRD-4)
+#
+# Folder of clips → ONE long mixed video. Because this mode fully re-encodes
+# and the estimate always exceeds the preview threshold, we ALWAYS:
+#   1. Print a render-time / size estimate and state that it re-encodes.
+#   2. Render a short preview (first few junctions) + run seam_check on it.
+#   3. Require explicit go/no-go (prompt on a TTY unless --yes) before the
+#      full multi-hour render.
+# ---------------------------------------------------------------------------
+mix_mode() {
+  local dir="$1" hours="$2" out="$3"
+  [[ -d "$dir" ]] || die "no such directory: $dir"
+  [[ -n "$out" ]] || die "--mix requires --out FILE"
+
+  local target_secs
+  target_secs="$(parse_duration "$hours")" || die "invalid HOURS: $hours"
+
+  # Rough estimate from the first clip's resolution + target length.
+  local first_clip
+  first_clip="$(find "$dir" -maxdepth 1 -mindepth 1 -type f | LC_ALL=C sort \
+    | while read -r f; do [[ "$(classify_input "$f")" == "video" ]] && { echo "$f"; break; }; done)"
+  [[ -n "$first_clip" ]] || die "--mix: no video clips found in $dir"
+  local pw ph
+  read -r pw ph < <("$FFPROBE" -v error -select_streams v:0 \
+    -show_entries stream=width,height -of csv=p=0 "$first_clip" | tr ',' ' ')
+  # Size estimate: extrapolate from the first clip's ACTUAL bytes-per-second
+  # (encoded), far more accurate than a raw-frame heuristic for H.264 content.
+  local fc_bytes fc_dur est_mb
+  fc_bytes="$(wc -c < "$first_clip" | tr -d ' ')"
+  fc_dur="$("$FFPROBE" -v error -show_entries format=duration \
+    -of default=noprint_wrappers=1:nokey=1 "$first_clip")"
+  est_mb="$(awk -v b="$fc_bytes" -v d="$fc_dur" -v t="$target_secs" \
+    'BEGIN{ if (d>0) printf "%.0f", b/d*t/1048576; else printf "?" }')"
+  # Re-encode render time is roughly proportional to output length; print a
+  # deliberately rough band rather than a false-precision single number.
+  local est_lo est_hi
+  est_lo="$(awk -v t="$target_secs" 'BEGIN{printf "%.0f", t/60*0.5}')"
+  est_hi="$(awk -v t="$target_secs" 'BEGIN{printf "%.0f", t/60*2}')"
+
+  printf '[mix] PLAN — this mode RE-ENCODES every clip (slow).\n'
+  printf '  target: %ss (%sh)  resolution: %sx%s\n' "$target_secs" "$hours" "$pw" "$ph"
+  printf '  estimated output size: ~%sMB\n' "$est_mb"
+  printf '  estimated render time: ~%s–%s min (rough; depends on machine/GPU)\n' "$est_lo" "$est_hi"
+
+  # --- Preview: render the first few junctions, seam-check the first one. ---
+  local preview_dir; preview_dir="$(mktemp -d)"
+  local preview="$preview_dir/preview.mp4"
+  local junc_file="$preview_dir/junction.txt"
+  printf '[mix] rendering preview (first few junctions)…\n'
+  if MIX_MAX_CLIPS=4 MIX_FIRST_JUNCTION_OUT="$junc_file" \
+       mix_clips "$dir" "$hours" "$preview" >/dev/null 2>&1; then
+    printf '  preview clip: %s\n' "$preview"
+    if [[ -s "$junc_file" ]]; then
+      local jf; jf="$(cat "$junc_file")"
+      local verdict
+      verdict="$(seam_check "$preview" "$jf" 2>/dev/null \
+        | grep -oE '(SEAMLESS|SOFT|VISIBLE)' | head -1 || true)"
+      [[ -n "$verdict" ]] && printf '  first-junction seam: %s\n' "$verdict"
+    fi
+  else
+    printf '  (preview render skipped — proceeding to full render)\n'
+  fi
+
+  # --- Go/no-go gate: prompt on a TTY unless --yes was given. ---
+  if [[ -t 0 && "$LOOP_YES" -eq 0 ]]; then
+    printf 'Proceed with the full render? [Y/n] '
+    local answer; read -r answer
+    case "${answer:-y}" in
+      y|Y|yes|YES) ;;
+      *) printf 'Aborted.\n'; rm -rf "$preview_dir"; return 1 ;;
+    esac
+  fi
+  rm -rf "$preview_dir"
+
+  mix_clips "$dir" "$hours" "$out"
+}
+
 case "$MODE" in
   # Parallel modes re-invoke THIS script in single mode (one process per image),
   # avoiding exported-function fragility. xargs -I{} uses newline as the only
@@ -567,7 +690,12 @@ case "$MODE" in
   dir)
     [[ -d "$DIR" ]] || die "no such directory: $DIR"
 
-    if [[ "$SLIDESHOW" -eq 1 ]]; then
+    if [[ "$MIX" -eq 1 ]]; then
+      # Mix mode (PRD-4): folder of clips → ONE long mixed video + soundtrack.
+      [[ -n "$MIX_HOURS" ]] || die "--mix requires a target HOURS"
+      [[ -n "$OUTDIR" ]] || die "--mix requires --out FILE"
+      mix_mode "$DIR" "$MIX_HOURS" "$OUTDIR"
+    elif [[ "$SLIDESHOW" -eq 1 ]]; then
       # Slideshow mode: folder of images → ONE long video with crossfades.
       [[ -n "$EACH_HOURS" ]] || die "--slideshow requires HOURS or --each HOURS"
       [[ -n "$OUTDIR" ]] || die "--slideshow requires --out OUTDIR"
