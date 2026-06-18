@@ -226,6 +226,13 @@ _loop_pingpong() {
   return $st
 }
 
+# NOTE on memory usage: the `reverse` and `areverse` filters used above buffer
+# the ENTIRE clip in RAM before emitting any output.  This is acceptable for
+# short clips but becomes prohibitive for long ones.  Rough ceiling: avoid
+# pingpong on clips longer than ~10 minutes (a 1080p/30fps clip at that length
+# can require several GB of RAM).  For longer sources, consider splitting into
+# a shorter representative segment before passing to loop_unit.
+
 # ---------------------------------------------------------------------------
 # _loop_crossfade CLIP OUT HAS_AUDIO XFADE
 #
@@ -311,7 +318,7 @@ _loop_crossfade() {
       -c:v libx264 -preset ultrafast -crf 23 \
       -c:a aac -b:a 64k \
       -pix_fmt yuv420p \
-      "$out"
+      "$out" || { echo "loop_unit: crossfade encode failed" >&2; return 1; }
   else
     # Video only
     "$FFMPEG" \
@@ -327,7 +334,7 @@ _loop_crossfade() {
       -an \
       -c:v libx264 -preset ultrafast -crf 23 \
       -pix_fmt yuv420p \
-      "$out"
+      "$out" || { echo "loop_unit: crossfade encode failed" >&2; return 1; }
   fi
 }
 
