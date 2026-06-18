@@ -36,6 +36,22 @@ Phases 0–3 DONE: shared core + PRD-5 (photo+audio) + PRD-2 (seamless loop-exte
 
 NOTE: not yet merged to `main`; drive copy at `/Volumes/1TB SSD/ImageToVideo/` still has the OLD silent-only tool — re-sync (lib/ + new make-video) when ready to hand off.
 
+## Definition of Done — status (as of 67988ae)
+- [x] Code complete for PRD-5 + PRD-2; every engine + mode implemented
+- [x] Tests: **98/98 bats green**; each engine/mode unit + integration tested with negative controls (teeth)
+- [x] Lint: `shellcheck -S warning make-video lib/*.sh setup-mac-arm64.sh` → clean (exit 0)
+- [x] Security: no secrets committed; ffmpeg/ffprobe binaries gitignored (reproduce via `setup-mac-arm64.sh`)
+- [x] Verification: every task passed two-stage review (spec + code-quality) with fix loops; reviewers re-ran tests
+- [x] Production smoke: PRD-5 real-smoked on the actual 4K fine-art TIFF + audio; PRD-2 real-smoked on a motion clip with `--loop pingpong` (preview reported SEAMLESS, output 36s h264+aac)
+- [x] Docs current: README.md, README.txt, architecture, 5 PRDs, implementation plan, this HANDOFF
+- [x] Branch pushed to origin
+- [ ] **NOT merged to `main`** (intentional — awaiting decision to ship)
+- [ ] **Drive copy NOT synced** — `/Volumes/1TB SSD/ImageToVideo/` still has the old silent-only tool; re-copy `make-video` + `lib/` (binaries already there) when shipping
+- N/A: registry-membership (no registry pattern in this project)
+
+## Recurring lesson (worth a `/learn`)
+The review gates caught **7 bugs that all had green tests**: silent-pass seam helper, toothless seam test, 48 kHz sample-rate click, toothless loudness test, temp-dir leak, preview gate reading the wrong frame, circular pingpong tip. The pattern: a green test isn't a passing test unless it has a **negative control** that fails on the broken case. Every seam/loudness/quality test in this repo now ships with one.
+
 ## Resume instructions
 1. `cd ~/github/ImageToVideo && git checkout feat/audio-and-transitions && git pull`
 2. `export PATH="/opt/homebrew/bin:$PATH" && bats tests/` → expect 53/53.
