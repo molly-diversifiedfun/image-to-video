@@ -45,7 +45,8 @@ The tool auto-detects the input: a **photo** â†’ still mode; a **video clip** â†
 
 | Flag | Effect |
 |------|--------|
-| `--audio PATH` | Add a soundtrack. A **file** loops seamlessly; a **folder** becomes a crossfaded, loudness-matched playlist. Fills the full length; video stream stays copied. |
+| `--audio PATH` | Add a soundtrack. A **file** loops seamlessly; a **folder** becomes a crossfaded, loudness-matched playlist. Fills the full length; video stream stays copied. On a **video clip**, the music **replaces** the clip's native sound by default. |
+| `--keep-native` | Layer the `--audio` music **over** a video clip's native sound instead of replacing it (mixed via `amix`). Requires `--audio`; ignored if the clip has no audio track. |
 | `--loop MODE` | Video-clip looping: `pingpong` (truly seamless, reverses motion), `crossfade` (default; hides the flash, not fully seamless), `native` (source already loops). |
 | `--xfade SECS` | Crossfade/seam duration (default 1.0s clips, used by `--loop crossfade`). |
 | `--yes` | Skip the loop-extend seam preview and render immediately (for scripts/batch). |

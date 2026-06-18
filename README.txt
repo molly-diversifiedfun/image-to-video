@@ -37,9 +37,16 @@ ADD MUSIC / SOUND  (works on any of the above)
   --audio "<one song>"      loops that song smoothly for the whole length
   --audio "<a song folder>" plays the songs back-to-back (a seamless
                             playlist), volume-matched, looped to fill
+  --keep-native             when the input is a VIDEO CLIP, play the music
+                            ON TOP OF the clip's own sound instead of
+                            replacing it (e.g. keep drone wind + add music).
+                            Without this, music replaces the clip's sound.
 
 Example — a photo for 2 hours with a song:
      bash "<make-video>" "<a photo>" 2 --audio "<a song>"
+
+Example — a drone clip stretched to 2h, music layered over the wind:
+     bash "<make-video>" "<a clip>" 2 --audio "<a song>" --keep-native
 
 ----------------------------------------------------------------
 STRETCHING A VIDEO CLIP (the loop)  — important
