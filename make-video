@@ -1,0 +1,222 @@
+#!/usr/bin/env bash
+#
+# make-video — turn a still image into a silent video of N hours.
+#
+# Strategy (fast AND reasonably small):
+#   1. Encode ONE short "base" segment of the image with a single keyframe
+#      (every frame after it is "identical to previous" and costs ~nothing).
+#   2. Concat-copy that base segment back-to-back (no re-encoding) to fill the
+#      requested duration. Encoding happens once per image, so a 10-hour file
+#      is produced about as fast as a 1-minute one.
+# Output: 4K-native H.264 .mp4, no audio, yuv420p, even dimensions, 30 fps.
+#
+# Usage:
+#   Single file:
+#     ./make-video FILE HOURS [OUTDIR]
+#     ./make-video 7FineArt_088.tiff 3
+#
+#   Whole directory, same duration for every image:
+#     ./make-video --dir IMAGES_DIR HOURS [--out OUTDIR] [--jobs N]
+#
+#   Per-file durations via manifest (CSV: path,hours — '#' starts a comment):
+#     ./make-video --manifest jobs.csv [--out OUTDIR] [--jobs N]
+#
+# Optional subtle motion (off by default):
+#     --zoom 4    slow continuous zoom of 4% over the whole video (re-encodes,
+#                 GPU-accelerated; a 3h file takes ~1.5-2h instead of ~90s).
+#
+# HOURS may be fractional (0.5 = 30 min, 0.0167 ≈ 1 min).
+# Point at a FOLDER instead of a file to batch the whole directory in parallel.
+
+set -euo pipefail
+
+readonly FPS=30                 # standard rate — YouTube re-encodes low fps poorly
+readonly CRF=18                 # static-mode quality (lower = better; 18 ≈ lossless)
+readonly BASE_SECS=30           # static-mode: length of the encoded-once base segment
+# 4K native. To output 1080p instead, change to: scale=1920:-2
+readonly SCALE="scale=trunc(iw/2)*2:trunc(ih/2)*2"
+readonly IMG_EXTS=(jpg jpeg png tif tiff bmp webp heic gif)
+
+# --- zoom (Ken Burns) settings ---
+ZOOM_PCT="${ZOOM_PCT:-0}"       # 0 = static (default, fast); opt in with --zoom 4
+readonly VBITRATE=25M           # zoom-mode target bitrate (GPU/VideoToolbox encode)
+readonly ZOOM_W=4096            # intermediate width — bigger = smoother subpixel zoom
+
+die() { printf 'error: %s\n' "$1" >&2; exit 1; }
+cores() { sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4; }
+
+# Locate ffmpeg/ffprobe: prefer a copy bundled in ./bin next to this script
+# (so the tool is self-contained on a drive), then fall back to the system PATH.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [[ -f "$SCRIPT_DIR/bin/ffmpeg" && -f "$SCRIPT_DIR/bin/ffprobe" ]]; then
+  # Bundled binaries. exFAT drives drop the exec bit and macOS may quarantine
+  # downloads, so re-arm both defensively (harmless no-ops otherwise).
+  chmod +x "$SCRIPT_DIR/bin/ffmpeg" "$SCRIPT_DIR/bin/ffprobe" 2>/dev/null || true
+  xattr -dr com.apple.quarantine "$SCRIPT_DIR/bin" 2>/dev/null || true
+  FFMPEG="$SCRIPT_DIR/bin/ffmpeg"; FFPROBE="$SCRIPT_DIR/bin/ffprobe"
+else
+  FFMPEG="$(command -v ffmpeg || true)"; FFPROBE="$(command -v ffprobe || true)"
+fi
+
+preflight() {
+  [[ -n "$FFMPEG" && -n "$FFPROBE" ]] && return 0
+  cat >&2 <<'MSG'
+error: ffmpeg / ffprobe not found.
+
+This tool needs ffmpeg. Easiest fix on a Mac:
+  1. Install Homebrew (one line, from https://brew.sh):
+       /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+  2. Then install ffmpeg:
+       brew install ffmpeg
+
+(Or drop static `ffmpeg` and `ffprobe` binaries into a `bin/` folder next to
+this script and it will use those automatically — no install needed.)
+MSG
+  exit 1
+}
+
+# Even (W H) dimensions of an image, space-separated.
+img_dims() {
+  local dims w h
+  dims="$("$FFPROBE" -v error -select_streams v:0 \
+    -show_entries stream=width,height -of csv=p=0 "$1")"
+  IFS=, read -r w h <<<"$dims"
+  printf '%d %d\n' "$((w - w % 2))" "$((h - h % 2))"
+}
+
+# STATIC mode: encode a single-keyframe segment of $2 seconds, $1 -> $3.
+encode_segment() {
+  local img="$1" secs="$2" out="$3"
+  "$FFMPEG" -nostdin -loglevel error -y \
+    -loop 1 -framerate "$FPS" -t "$secs" -i "$img" \
+    -vf "$SCALE,format=yuv420p" \
+    -c:v libx264 -tune stillimage -crf "$CRF" \
+    -g 999999 -keyint_min 999999 -sc_threshold 0 \
+    -an -movflags +faststart "$out"
+}
+
+# STATIC mode: image + total seconds -> out (encode-once base, then concat-copy).
+make_static() {
+  local img="$1" total="$2" out="$3" tmp; tmp="$(mktemp -d)"
+  if [[ "$total" -le "$BASE_SECS" ]]; then
+    encode_segment "$img" "$total" "$out"
+  else
+    local base="$tmp/base.mp4" list="$tmp/list.txt"
+    local loops=$(( total / BASE_SECS )) rem=$(( total % BASE_SECS )) i
+    encode_segment "$img" "$BASE_SECS" "$base"
+    : > "$list"
+    for (( i=0; i<loops; i++ )); do printf "file '%s'\n" "$base" >> "$list"; done
+    [[ "$rem" -gt 0 ]] && { encode_segment "$img" "$rem" "$tmp/rem.mp4"; \
+      printf "file '%s'\n" "$tmp/rem.mp4" >> "$list"; }
+    "$FFMPEG" -nostdin -loglevel error -y -f concat -safe 0 -i "$list" \
+      -c copy -movflags +faststart "$out"
+  fi
+  rm -rf "$tmp"
+}
+
+# ZOOM mode: continuous one-way zoom (1.00 -> 1+ZOOM_PCT%) across the whole
+# duration. Every frame is unique, so this re-encodes (GPU/VideoToolbox).
+make_zoom() {
+  local img="$1" total="$2" out="$3" w h
+  read -r w h < <(img_dims "$img")
+  local n=$(( total * FPS ))
+  local z="1+(${ZOOM_PCT}/100)*on/(${n}-1)"
+  "$FFMPEG" -nostdin -loglevel error -y -i "$img" \
+    -vf "scale=${ZOOM_W}:-2,zoompan=z='${z}':d=${n}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${w}x${h}:fps=${FPS},format=yuv420p" \
+    -c:v h264_videotoolbox -b:v "$VBITRATE" -an -t "$total" \
+    -movflags +faststart "$out"
+}
+
+# Build one video: image + hours -> out_path.
+make_one() {
+  local img="$1" hours="$2" out="$3"
+  [[ -f "$img" ]] || die "no such file: $img"
+  local total; total=$(awk -v h="$hours" 'BEGIN{printf "%d", h*3600 + 0.5}')
+  [[ "$total" -gt 0 ]] || die "hours must be > 0 (got: $hours)"
+
+  if [[ "$ZOOM_PCT" == "0" ]]; then make_static "$img" "$total" "$out"
+  else make_zoom "$img" "$total" "$out"; fi
+  printf '✓ %s  (%sh = %ss, zoom %s%%)  ->  %s\n' \
+    "$(basename "$img")" "$hours" "$total" "$ZOOM_PCT" "$out"
+}
+
+is_image() {
+  local b; b="$(basename "$1")"
+  [[ "$b" == ._* ]] && return 1          # skip macOS AppleDouble junk
+  local ext="${1##*.}"; ext="$(printf '%s' "$ext" | tr '[:upper:]' '[:lower:]')"
+  local e; for e in "${IMG_EXTS[@]}"; do [[ "$ext" == "$e" ]] && return 0; done
+  return 1
+}
+
+out_path() {  # image, outdir -> outdir/name.mp4
+  local img="$1" outdir="$2" name
+  name="$(basename "$img")"; name="${name%.*}"
+  printf '%s/%s.mp4' "${outdir:-$(dirname "$img")}" "$name"
+}
+
+# ---- argument parsing -------------------------------------------------------
+
+MODE="single" DIR="" MANIFEST="" OUTDIR="" JOBS="" HOURS=""
+POS=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dir)      MODE="dir";      DIR="$2";      shift 2;;
+    --manifest) MODE="manifest"; MANIFEST="$2"; shift 2;;
+    --out)      OUTDIR="$2";     shift 2;;
+    --jobs)     JOBS="$2";       shift 2;;
+    --zoom)     ZOOM_PCT="$2";   shift 2;;
+    --static)   ZOOM_PCT=0;      shift;;
+    -h|--help)  sed -n '2,40p' "$0"; exit 0;;
+    -*)         die "unknown flag: $1";;
+    *)          POS+=("$1");     shift;;
+  esac
+done
+
+preflight   # verify ffmpeg/ffprobe exist before doing any work
+
+# "Point at a folder + a number": if the first positional is a directory,
+# treat it as batch mode automatically — no --dir needed.
+if [[ "$MODE" == "single" && ${#POS[@]} -ge 1 && -d "${POS[0]}" ]]; then
+  MODE="dir"; DIR="${POS[0]}"; POS=("${POS[@]:1}")
+fi
+
+# Auto-pick parallelism by mode (override with --jobs):
+#   zoom  → the zoompan filter is ~single-core and the GPU encoder is shared,
+#           so run several at once to fill cores (but not so many the GPU chokes).
+#   static→ libx264 is already multi-threaded, so a couple at a time is plenty.
+if [[ -z "$JOBS" ]]; then
+  c="$(cores)"
+  if [[ "$ZOOM_PCT" == "0" ]]; then JOBS=$(( c >= 4 ? 2 : 1 ))
+  else JOBS=$(( c >= 8 ? 4 : (c >= 4 ? 2 : 1) )); fi
+fi
+
+[[ -n "$OUTDIR" ]] && mkdir -p "$OUTDIR"
+export ZOOM_PCT                 # propagate to re-invoked single-mode children
+
+case "$MODE" in
+  # Parallel modes re-invoke THIS script in single mode (one process per image),
+  # avoiding exported-function fragility. xargs -I{} uses newline as the only
+  # delimiter, so spaces in paths (e.g. "/Volumes/1TB SSD/...") are safe.
+  single)
+    [[ ${#POS[@]} -ge 2 ]] || die "usage: $0 FILE HOURS [OUTDIR]"
+    make_one "${POS[0]}" "${POS[1]}" "$(out_path "${POS[0]}" "${POS[2]:-$OUTDIR}")"
+    ;;
+  dir)
+    [[ -d "$DIR" ]] || die "no such directory: $DIR"
+    [[ ${#POS[@]} -ge 1 ]] || die "--dir mode needs HOURS: $0 --dir DIR HOURS"
+    HOURS="${POS[0]}"
+    find "$DIR" -maxdepth 1 -type f | while read -r f; do
+      is_image "$f" && printf '%s\n' "$f"
+    done | xargs -P "$JOBS" -I{} "$0" {} "$HOURS" "$OUTDIR"
+    ;;
+  manifest)
+    [[ -f "$MANIFEST" ]] || die "no such manifest: $MANIFEST"
+    grep -v -e '^[[:space:]]*#' -e '^[[:space:]]*$' "$MANIFEST" \
+      | xargs -P "$JOBS" -I{} bash -c '
+          IFS=, read -r img hrs <<<"$2"
+          img="$(printf "%s" "$img" | xargs)"   # trim surrounding whitespace
+          hrs="$(printf "%s" "$hrs" | xargs)"
+          exec "$1" "$img" "$hrs" "$3"
+        ' _ "$0" {} "$OUTDIR"
+    ;;
+esac

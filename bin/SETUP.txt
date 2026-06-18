@@ -1,0 +1,10 @@
+This folder holds the ffmpeg + ffprobe binaries the tool runs on.
+
+They are NOT in git (too large). Get them one of three ways:
+
+  1. Run the installer (Apple Silicon):   ./setup-mac-arm64.sh
+  2. Or install system ffmpeg:            brew install ffmpeg
+  3. Or drop your own static `ffmpeg` and `ffprobe` binaries right here.
+
+make-video uses ./bin/ffmpeg and ./bin/ffprobe automatically if present,
+otherwise it falls back to whatever ffmpeg is on your PATH.

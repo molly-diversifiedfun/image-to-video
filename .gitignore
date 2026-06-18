@@ -1,0 +1,8 @@
+# Bundled ffmpeg binaries — large (~49 MB each), not version-controlled.
+# Fetch them with ./setup-mac-arm64.sh (see README.md), or `brew install ffmpeg`.
+bin/ffmpeg
+bin/ffprobe
+
+# Output / scratch
+*.mp4
+.DS_Store

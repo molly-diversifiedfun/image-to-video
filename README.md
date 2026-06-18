@@ -1,0 +1,53 @@
+# image-to-video
+
+Turn a still image into a long **silent** video — any length, from one image or a whole folder. Built for ambient screens, gallery displays, and YouTube.
+
+The trick that makes it fast: a static image only needs **one keyframe for the whole video**. The tool encodes a short segment once, then concat-copies it (no re-encoding) to fill the duration — so a 3-hour 4K file is ready in **~90 seconds**, not hours.
+
+## Requirements
+
+- macOS, **Apple Silicon** (M1–M5)
+- ffmpeg + ffprobe — fetched into `bin/` (see [Setup](#setup)); no other dependencies
+
+## Setup
+
+```bash
+./setup-mac-arm64.sh      # downloads + checksum-verifies ffmpeg/ffprobe into bin/
+```
+
+Alternatives: `brew install ffmpeg`, or drop your own static `ffmpeg`/`ffprobe` into `bin/`. The script prefers `bin/`, then falls back to `PATH`.
+
+## Usage
+
+```bash
+# One image → 3-hour video
+./make-video photo.tiff 3
+
+# A whole folder → every image becomes its own 3-hour video (parallel)
+./make-video /path/to/images 3
+
+# Per-file durations from a CSV (path,hours)
+./make-video --manifest jobs.csv
+```
+
+`HOURS` may be fractional: `0.5` = 30 min, `0.0167` ≈ 1 min (good for a quick test). Point at a **folder** instead of a file to batch the whole directory.
+
+### Options
+
+| Flag | Effect |
+|------|--------|
+| `--zoom N` | Add a slow continuous zoom of N% over the whole video. **Re-encodes every frame** (GPU/VideoToolbox), so it's slow: a 3h file takes ~1.5–2h instead of ~90s. |
+| `--out DIR` | Write `.mp4`s to `DIR` instead of next to the source images. |
+| `--jobs N` | Concurrency. Omit it — auto-picked by mode (zoom is single-core-bound per job; static is multi-threaded). |
+| `--static` | Force the fast no-zoom path (the default). |
+| `-h`, `--help` | Full usage. |
+
+## Output
+
+4K-native H.264 `.mp4`, 30 fps, **no audio**, `yuv420p`, even dimensions, `+faststart` — uploads straight to YouTube. Static mode ≈ a few GB for 3h; `--zoom` at high quality ≈ ~34 GB for a 3h 4K file.
+
+## Behavior notes
+
+- Skips non-images and macOS `._` AppleDouble junk automatically.
+- Bundled-binary mode self-heals exec bits and quarantine on startup (for ExFAT drives / cross-machine use).
+- `bin/ffmpeg` + `bin/ffprobe` are gitignored; reproduce them with `setup-mac-arm64.sh`.
