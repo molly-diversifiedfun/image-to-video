@@ -9,6 +9,100 @@
 # are available.
 
 # ---------------------------------------------------------------------------
+# assert_tone_present FILE FREQ
+#
+# Fails if the audio in FILE does NOT contain a tone near FREQ Hz.
+#
+# Method: bandpass-filter the audio around FREQ (±25 Hz passband), then
+# measure RMS level with astats.  A genuine sine at that frequency will
+# read roughly –21 dB after bandpass; the noise floor sits below –45 dB.
+# Threshold: –35 dB (midpoint between –21 dB present and –45 dB absent,
+# calibrated 2026-06-18 using 220 Hz / 880 Hz sine fixtures).
+#
+# If the RMS is ABOVE the threshold (louder than –35 dB), the tone is
+# considered PRESENT.
+#
+# NEGATIVE CONTROL: the same helper on a file that lacks the tone will be
+# BELOW –35 dB and will fail — ensuring the assertion is not trivially true.
+# ---------------------------------------------------------------------------
+assert_tone_present() {
+  local file="${1:?assert_tone_present: FILE required}"
+  local freq="${2:?assert_tone_present: FREQ required}"
+
+  [[ -f "$file" ]] || { echo "assert_tone_present: file not found: $file" >&2; return 1; }
+
+  # Threshold: RMS must be ABOVE this value (tone present ≈ –21 dB, absent ≈ –45 dB+)
+  local threshold_db="-35"
+
+  local rms_db
+  rms_db="$("$FFMPEG" -nostdin \
+    -i "$file" \
+    -af "bandpass=f=${freq}:width_type=h:w=50,astats=metadata=1:reset=0" \
+    -vn \
+    -f null - 2>&1 \
+    | grep "RMS level dB" | tail -1 | awk '{print $NF}')"
+
+  [[ -n "$rms_db" ]] || {
+    echo "assert_tone_present: could not extract RMS level from astats output (file: $file, freq: ${freq})" >&2
+    return 1
+  }
+
+  local ok
+  ok="$(awk -v rms="$rms_db" -v thr="$threshold_db" 'BEGIN {
+    print (rms > thr) ? "ok" : "fail"
+  }')"
+
+  if [[ "$ok" != "ok" ]]; then
+    echo "assert_tone_present: tone at ${freq} Hz ABSENT in $file" \
+         "(RMS=${rms_db} dB, threshold=${threshold_db} dB — must be above)" >&2
+    return 1
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# assert_tone_absent FILE FREQ
+#
+# Fails if the audio in FILE DOES contain a tone near FREQ Hz.
+#
+# Mirror of assert_tone_present: tone is considered ABSENT if the bandpass
+# RMS is BELOW –35 dB.  Calibrated 2026-06-18: absent tone reads –45 to –57 dB;
+# present tone reads –21 to –27 dB.
+# ---------------------------------------------------------------------------
+assert_tone_absent() {
+  local file="${1:?assert_tone_absent: FILE required}"
+  local freq="${2:?assert_tone_absent: FREQ required}"
+
+  [[ -f "$file" ]] || { echo "assert_tone_absent: file not found: $file" >&2; return 1; }
+
+  # Threshold: RMS must be BELOW this value (absent ≈ –45 dB, present ≈ –21 dB)
+  local threshold_db="-35"
+
+  local rms_db
+  rms_db="$("$FFMPEG" -nostdin \
+    -i "$file" \
+    -af "bandpass=f=${freq}:width_type=h:w=50,astats=metadata=1:reset=0" \
+    -vn \
+    -f null - 2>&1 \
+    | grep "RMS level dB" | tail -1 | awk '{print $NF}')"
+
+  [[ -n "$rms_db" ]] || {
+    echo "assert_tone_absent: could not extract RMS level from astats output (file: $file, freq: ${freq})" >&2
+    return 1
+  }
+
+  local ok
+  ok="$(awk -v rms="$rms_db" -v thr="$threshold_db" 'BEGIN {
+    print (rms < thr) ? "ok" : "fail"
+  }')"
+
+  if [[ "$ok" != "ok" ]]; then
+    echo "assert_tone_absent: tone at ${freq} Hz PRESENT in $file" \
+         "(RMS=${rms_db} dB, threshold=${threshold_db} dB — must be below)" >&2
+    return 1
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # assert_duration FILE SECS TOL
 #
 # Fails if the container duration of FILE differs from SECS by more than TOL.

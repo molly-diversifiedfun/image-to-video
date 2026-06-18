@@ -25,11 +25,14 @@
 #     --zoom 4    slow continuous zoom of 4% over the whole video (re-encodes,
 #                 GPU-accelerated; a 3h file takes ~1.5-2h instead of ~90s).
 #
-# Optional soundtrack:
-#     --audio PATH   add a soundtrack; PATH is a single audio file or a folder
-#                    of audio files (crossfaded playlist). The audio is looped /
-#                    trimmed to exactly match the video duration, then muxed in.
-#                    Video stream is always copied (not re-encoded).
+# Optional soundtrack (loop-extend mode):
+#     --audio PATH   replace the clip's native audio with a music bed; PATH is a
+#                    single audio file or a folder of audio files (crossfaded
+#                    playlist). The audio is looped/trimmed to match the video
+#                    duration, then muxed in. Video stream always copied.
+#     --keep-native  layer the music bed OVER the clip's native sound instead of
+#                    replacing it. Requires --audio. If the clip has no native
+#                    audio track, this flag is silently ignored (replace path used).
 #
 # HOURS may be fractional (0.5 = 30 min, 0.0167 ≈ 1 min).
 # Point at a FOLDER instead of a file to batch the whole directory in parallel.
@@ -215,6 +218,8 @@ MODE="single" DIR="" MANIFEST="" OUTDIR="" JOBS="" HOURS=""
 LOOP_STRATEGY="crossfade"   # loop-extend: crossfade|pingpong|native
 LOOP_XFADE="1.0"            # loop-extend: xfade window in seconds
 LOOP_YES=0                  # loop-extend: 1 = skip interactive prompt
+KEEP_NATIVE=0               # loop-extend + --audio: 0 = replace native audio (default);
+                            #                        1 = layer music over native (--keep-native)
 POS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -231,12 +236,17 @@ while [[ $# -gt 0 ]]; do
         *) die "unknown --loop value '${2}' (use crossfade|pingpong|native)";;
       esac;;
     --xfade)    LOOP_XFADE="$2";      shift 2;;
-    --yes)      LOOP_YES=1;           shift;;
+    --yes)         LOOP_YES=1;        shift;;
+    --keep-native) KEEP_NATIVE=1;    shift;;
     -h|--help)  sed -n '2,40p' "$0"; exit 0;;
     -*)         die "unknown flag: $1";;
     *)          POS+=("$1");          shift;;
   esac
 done
+
+# Validate flag combinations before doing any work.
+[[ "$KEEP_NATIVE" -eq 1 && -z "$AUDIO_PATH" ]] && \
+  die "--keep-native requires --audio"
 
 preflight   # verify ffmpeg/ffprobe exist before doing any work
 
@@ -439,28 +449,63 @@ loop_extend_mode() {
         "$out" || { _cleanup_loop_tmp; return 1; }
     fi
   else
-    # External audio requested: tile silent (or native-audio) tiled video to
-    # a temp file, then replace audio with audio_build + mux_audio.
-    "$FFMPEG" -nostdin -loglevel error -y \
-      -f concat -safe 0 -i "$list_file" \
-      -t "$target_secs" \
-      -c:v copy -an \
-      -movflags +faststart \
-      "$tiled_file" || { _cleanup_loop_tmp; return 1; }
+    # External audio requested.
+    # --keep-native=1 AND unit has audio → layer music over native.
+    # --keep-native=1 AND unit has no audio → note + fall back to replace.
+    # --keep-native=0 (default) → replace (strip native, mux music only).
+    local audio_mode="replace"
+    if [[ "$KEEP_NATIVE" -eq 1 ]]; then
+      if [[ "$unit_has_audio" -eq 1 ]]; then
+        audio_mode="layer"
+      else
+        printf 'note: --keep-native ignored, clip has no audio track\n' >&2
+      fi
+    fi
 
     local tmp_audio="$tmp_dir/audio.aac"
-    audio_build "$AUDIO_PATH" "$target_secs" "$tmp_audio" \
-      || { _cleanup_loop_tmp; return 1; }
 
-    mux_audio "$tiled_file" "$tmp_audio" "$out" \
-      || { _cleanup_loop_tmp; return 1; }
+    if [[ "$audio_mode" == "layer" ]]; then
+      # Tile WITH native audio preserved (-c copy, no -an).
+      "$FFMPEG" -nostdin -loglevel error -y \
+        -f concat -safe 0 -i "$list_file" \
+        -t "$target_secs" \
+        -c copy \
+        -movflags +faststart \
+        "$tiled_file" || { _cleanup_loop_tmp; return 1; }
+
+      audio_build "$AUDIO_PATH" "$target_secs" "$tmp_audio" \
+        || { _cleanup_loop_tmp; return 1; }
+
+      mux_audio_layer "$tiled_file" "$tmp_audio" "$out" \
+        || { _cleanup_loop_tmp; return 1; }
+    else
+      # Replace: tile silent (strip native audio), then mux external music.
+      "$FFMPEG" -nostdin -loglevel error -y \
+        -f concat -safe 0 -i "$list_file" \
+        -t "$target_secs" \
+        -c:v copy -an \
+        -movflags +faststart \
+        "$tiled_file" || { _cleanup_loop_tmp; return 1; }
+
+      audio_build "$AUDIO_PATH" "$target_secs" "$tmp_audio" \
+        || { _cleanup_loop_tmp; return 1; }
+
+      mux_audio "$tiled_file" "$tmp_audio" "$out" \
+        || { _cleanup_loop_tmp; return 1; }
+    fi
   fi
 
   _cleanup_loop_tmp
 
+  local audio_label
+  if [[ -n "$AUDIO_PATH" ]]; then
+    audio_label="${audio_mode:-replace}: $AUDIO_PATH"
+  else
+    audio_label="(native)"
+  fi
   printf '✓ %s  (%sh = %ss, loop %s, xfade %ss, audio %s)  ->  %s\n' \
     "$(basename "$clip")" "$hours" "$target_secs" "$LOOP_STRATEGY" "$LOOP_XFADE" \
-    "${AUDIO_PATH:-(native)}" "$out"
+    "$audio_label" "$out"
 }
 
 case "$MODE" in

@@ -292,3 +292,76 @@ teardown() {
   [ "$status" -ne 0 ]
   echo "$output" | grep -qi "loop"
 }
+
+# ---------------------------------------------------------------------------
+# Test 11 — replace (default): music bed replaces native audio.
+#
+# Fixtures: clip has 220 Hz native audio; music bed has 880 Hz.
+# After loop-extend --audio (no --keep-native):
+#   - Output MUST have 880 Hz PRESENT.
+#   - Output MUST have 220 Hz ABSENT.
+# NEGATIVE CONTROL: assert that the SOURCE CLIP has 220 Hz PRESENT — proving
+# the assert_tone_absent check on the output is real and not trivially passing.
+# ---------------------------------------------------------------------------
+
+@test "loop-extend --audio (replace default): 880Hz music present, 220Hz native absent; negative ctrl on source" {
+  local clip="$WORK_DIR/clip_220.mp4"
+  local music="$WORK_DIR/music_880.aac"
+  local out="$WORK_DIR/clip_220.mp4"
+
+  mk_clip "$clip" 220 3
+  mk_audio "$music" 880 5
+
+  # NEGATIVE CONTROL: source clip must have 220 Hz present (validates the helper isn't trivially true).
+  assert_tone_present "$clip" 220
+
+  run "$REPO_ROOT/make-video" "$clip" 0.005 --yes --audio "$music" --out "$WORK_DIR"
+  [ "$status" -eq 0 ]
+  [ -f "$out" ]
+
+  # 880 Hz music must be present in the output.
+  assert_tone_present "$out" 880
+  # 220 Hz native must be absent (replaced).
+  assert_tone_absent "$out" 220
+}
+
+# ---------------------------------------------------------------------------
+# Test 12 — keep-native (layer): both tones present in output.
+#
+# Same fixtures as Test 11 (220 Hz clip, 880 Hz music).
+# With --keep-native, amix mixes both tracks — both tones must appear.
+# ---------------------------------------------------------------------------
+
+@test "loop-extend --audio --keep-native (layer): both 220Hz native and 880Hz music present" {
+  local clip="$WORK_DIR/clip_220.mp4"
+  local music="$WORK_DIR/music_880.aac"
+  local out="$WORK_DIR/clip_220.mp4"
+
+  mk_clip "$clip" 220 3
+  mk_audio "$music" 880 5
+
+  run "$REPO_ROOT/make-video" "$clip" 0.005 --yes --audio "$music" --keep-native --out "$WORK_DIR"
+  [ "$status" -eq 0 ]
+  [ -f "$out" ]
+
+  # Both tones must coexist in the layered output.
+  assert_tone_present "$out" 220
+  assert_tone_present "$out" 880
+}
+
+# ---------------------------------------------------------------------------
+# Test 13 — --keep-native without --audio fails with a clear error.
+#
+# --keep-native without --audio has no defined meaning.  The tool must
+# reject this combination at arg-parse time with a message that includes
+# "keep-native" or "audio".
+# ---------------------------------------------------------------------------
+
+@test "loop-extend --keep-native without --audio: fails with clear error" {
+  local clip="$WORK_DIR/src.mp4"
+  mk_clip "$clip" 220 3
+
+  run "$REPO_ROOT/make-video" "$clip" 0.005 --yes --keep-native --out "$WORK_DIR"
+  [ "$status" -ne 0 ]
+  echo "$output" | grep -qiE "(keep.native|audio)"
+}
