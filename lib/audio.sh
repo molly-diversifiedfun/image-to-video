@@ -461,7 +461,15 @@ audio_build() {
     # Step 1: build the seamless unit as PCM in a temp file so we can
     # measure its exact sample count for aloop's size= parameter.
     local unit_wav
-    unit_wav="$(mktemp -p "$WORK_DIR" 2>/dev/null || mktemp)"
+    # Use WORK_DIR as the temp base dir when available (keeps temps near test
+    # fixtures for easy teardown), otherwise fall back to the system default.
+    # Guard against set -u: ${WORK_DIR:-} expands to empty string if unset.
+    local _tmp_base="${WORK_DIR:-}"
+    if [[ -n "$_tmp_base" ]]; then
+      unit_wav="$(mktemp -p "$_tmp_base" 2>/dev/null || mktemp)"
+    else
+      unit_wav="$(mktemp)"
+    fi
     # Ensure the temp file ends with .wav for ffmpeg format detection.
     # On cross-device temp dirs mv fails; clean up the original before reassigning
     # to avoid leaking a stale file without the .wav suffix.
