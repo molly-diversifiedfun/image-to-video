@@ -83,6 +83,8 @@ source "$SCRIPT_DIR/lib/duration.sh"
 source "$SCRIPT_DIR/lib/loop.sh"
 # shellcheck source=lib/seam.sh
 source "$SCRIPT_DIR/lib/seam.sh"
+# shellcheck source=lib/slideshow.sh
+source "$SCRIPT_DIR/lib/slideshow.sh"
 
 preflight() {
   [[ -n "$FFMPEG" && -n "$FFPROBE" ]] && return 0
@@ -220,6 +222,12 @@ LOOP_XFADE="1.0"            # loop-extend: xfade window in seconds
 LOOP_YES=0                  # loop-extend: 1 = skip interactive prompt
 KEEP_NATIVE=0               # loop-extend + --audio: 0 = replace native audio (default);
                             #                        1 = layer music over native (--keep-native)
+SLIDESHOW=0                 # 1 = slideshow mode (folder of images → one long video)
+SLIDESHOW_XFADE="2.5"       # slideshow: dissolve duration in seconds (default 2.5)
+SLIDESHOW_SHUFFLE=0         # slideshow: 1 = shuffle image order
+SLIDESHOW_SEED="$$"         # slideshow: seed for shuffle
+SLIDESHOW_FILL=0            # slideshow: 1 = crop-to-fill; 0 = letterbox (default)
+EACH_HOURS=""               # slideshow: per-image hold in hours (alias for positional HOURS)
 POS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -235,9 +243,14 @@ while [[ $# -gt 0 ]]; do
         crossfade|pingpong|native) LOOP_STRATEGY="$2"; shift 2;;
         *) die "unknown --loop value '${2}' (use crossfade|pingpong|native)";;
       esac;;
-    --xfade)    LOOP_XFADE="$2";      shift 2;;
+    --xfade)    LOOP_XFADE="$2"; SLIDESHOW_XFADE="$2"; shift 2;;
     --yes)         LOOP_YES=1;        shift;;
     --keep-native) KEEP_NATIVE=1;    shift;;
+    --slideshow)   SLIDESHOW=1;       shift;;
+    --each)        EACH_HOURS="$2";   shift 2;;
+    --shuffle)     SLIDESHOW_SHUFFLE=1; shift;;
+    --seed)        SLIDESHOW_SEED="$2"; SLIDESHOW_SHUFFLE=1; shift 2;;
+    --fill)        SLIDESHOW_FILL=1;  shift;;
     -h|--help)  sed -n '2,40p' "$0"; exit 0;;
     -*)         die "unknown flag: $1";;
     *)          POS+=("$1");          shift;;
@@ -248,12 +261,35 @@ done
 [[ "$KEEP_NATIVE" -eq 1 && -z "$AUDIO_PATH" ]] && \
   die "--keep-native requires --audio"
 
+# --slideshow on a single file (not a directory) is invalid.
+if [[ "$SLIDESHOW" -eq 1 && ${#POS[@]} -ge 1 && -f "${POS[0]}" ]]; then
+  die "--slideshow requires a directory input, not a single file"
+fi
+
+# --zoom with --slideshow is invalid.
+if [[ "$SLIDESHOW" -eq 1 && "$ZOOM_PCT" != "0" ]]; then
+  die "--zoom is not supported in slideshow mode"
+fi
+
+export SLIDESHOW_XFADE SLIDESHOW_SHUFFLE SLIDESHOW_SEED SLIDESHOW_FILL
+
 preflight   # verify ffmpeg/ffprobe exist before doing any work
 
 # "Point at a folder + a number": if the first positional is a directory,
 # treat it as batch mode automatically — no --dir needed.
 if [[ "$MODE" == "single" && ${#POS[@]} -ge 1 && -d "${POS[0]}" ]]; then
   MODE="dir"; DIR="${POS[0]}"; POS=("${POS[@]:1}")
+fi
+
+# Resolve EACH_HOURS (--each flag) vs positional HOURS for slideshow mode.
+# If --each was given, it takes precedence.  If --each is empty but a
+# positional HOURS exists, use that as EACH_HOURS.
+if [[ "$SLIDESHOW" -eq 1 ]]; then
+  if [[ -z "$EACH_HOURS" ]]; then
+    # Fall back to first positional arg as HOURS
+    [[ ${#POS[@]} -ge 1 ]] && { EACH_HOURS="${POS[0]}"; POS=("${POS[@]:1}"); } \
+      || die "--slideshow requires HOURS or --each HOURS"
+  fi
 fi
 
 # Auto-pick parallelism by mode (override with --jobs):
@@ -266,7 +302,11 @@ if [[ -z "$JOBS" ]]; then
   else JOBS=$(( c >= 8 ? 4 : (c >= 4 ? 2 : 1) )); fi
 fi
 
-[[ -n "$OUTDIR" ]] && mkdir -p "$OUTDIR"
+# In slideshow mode, OUTDIR is the output FILE path (not a directory).
+# Skip the mkdir-p so we don't accidentally create "out.mp4" as a directory.
+if [[ "$SLIDESHOW" -eq 0 && -n "$OUTDIR" ]]; then
+  mkdir -p "$OUTDIR"
+fi
 export ZOOM_PCT                 # propagate to re-invoked single-mode children
 export AUDIO_PATH               # propagate to re-invoked single-mode children
 
@@ -526,11 +566,20 @@ case "$MODE" in
     ;;
   dir)
     [[ -d "$DIR" ]] || die "no such directory: $DIR"
-    [[ ${#POS[@]} -ge 1 ]] || die "--dir mode needs HOURS: $0 --dir DIR HOURS"
-    HOURS="${POS[0]}"
-    find "$DIR" -maxdepth 1 -type f | while read -r f; do
-      is_image "$f" && printf '%s\n' "$f"
-    done | xargs -P "$JOBS" -I{} "$0" {} "$HOURS" "$OUTDIR"
+
+    if [[ "$SLIDESHOW" -eq 1 ]]; then
+      # Slideshow mode: folder of images → ONE long video with crossfades.
+      [[ -n "$EACH_HOURS" ]] || die "--slideshow requires HOURS or --each HOURS"
+      [[ -n "$OUTDIR" ]] || die "--slideshow requires --out OUTDIR"
+      xfade_join "$DIR" "$EACH_HOURS" "$OUTDIR"
+    else
+      # Batch mode (default): each image → its own video (existing behaviour).
+      [[ ${#POS[@]} -ge 1 ]] || die "--dir mode needs HOURS: $0 --dir DIR HOURS"
+      HOURS="${POS[0]}"
+      find "$DIR" -maxdepth 1 -type f | while read -r f; do
+        is_image "$f" && printf '%s\n' "$f"
+      done | xargs -P "$JOBS" -I{} "$0" {} "$HOURS" "$OUTDIR"
+    fi
     ;;
   manifest)
     [[ -f "$MANIFEST" ]] || die "no such manifest: $MANIFEST"

@@ -1,10 +1,16 @@
 # HANDOFF — make-video build (audio + transitions)
 
 **Date:** 2026-06-18
-**Branch:** `feat/prd-3-keep-native` (pushed; not yet merged to main). Prior work merged to main at `5f8a800`.
-**Milestones:** PRD-5 (photo+audio), PRD-2 (seamless loop-extend), AND PRD-3 (clip+soundtrack) COMPLETE. **3 of 5 shipped.** 101/101 tests.
+**Branches (pushed, awaiting merge to main):** `feat/prd-1-slideshow`, `chore/brew-setup-docs`. PRD-3 already merged to main at `2695772`.
+**Milestones:** PRD-5 (photo+audio), PRD-2 (seamless loop-extend), PRD-3 (clip+soundtrack), AND PRD-1 (slideshow) COMPLETE. **4 of 5 shipped.** 110/110 tests. Only PRD-4 (multi-clip mixer) remains.
 
-> **PRD-3 (2026-06-18):** Default `--audio`-replaces-native was already done in PRD-2. The only delta added was `--keep-native` — layer the music bed OVER a clip's native sound via `mux_audio_layer` (ffmpeg `amix`). New teeth tests: bandpass-RMS tone helpers (`assert_tone_present/absent`, -35 dB threshold) + negative controls (replace strips native → 220 Hz absent; layer keeps both 220+880 Hz). Branch pushed; **merge to main when ready.** Real-smoke on actual drone footage still blocked on the unmounted SSD (same as the drive sync).
+> **PRD-1 slideshow (2026-06-18):** New `lib/slideshow.sh::xfade_join` — a folder of images → ONE long video, each held then crossfaded into the next. Trigger: `--slideshow` on a directory (default folder behavior = batch, preserved). Flags: `--each HOURS`, `--xfade`, `--shuffle`/`--seed`, `--fill`, `--audio`. Total = n·each − (n−1)·xfade. Fast: holds use the encode-once+concat-copy trick (`_slideshow_build_hold`, mirrors `make_static`) so render time is O(1) in hold length — **review caught a perf bug where holds re-encoded every frame (17.9s vs 4.2s for a 120s hold @1080p); fixed.** Teeth tests: dissolve-not-a-hard-cut with a hard-cut negative control (PSNR ~40 dB dissolve vs ~12 dB hard cut), junk-file skip via duration discrimination, long-hold (>30s) test forcing the concat-copy path. On branch `feat/prd-1-slideshow`; merge when ready.
+
+> **PRD-3 (2026-06-18, MERGED `2695772`):** `--keep-native` layers the `--audio` music bed OVER a clip's native sound via `mux_audio_layer` (ffmpeg `amix`); default stays replace. Teeth: bandpass-RMS tone helpers (`assert_tone_present/absent`, -35 dB) + negative controls.
+
+> **Brew cleanup (2026-06-18):** Friend now has Homebrew + Xcode, so the zero-install constraint is relaxed. Docs reordered to lead with `brew install ffmpeg` (resolution already falls back to PATH — verified end-to-end on brew ffmpeg 8.0.1). Bundled `bin/` + `setup-mac-arm64.sh` kept as the portable/no-install alternative. On branch `chore/brew-setup-docs`. **NOTE: zero-install is no longer a hard constraint — PRD-4 may use Python if bash sequencing gets ugly.**
+
+> Real-smoke on the operator's actual media still blocked on the unmounted SSD (same as the drive sync). bats runs the real tool on generated media as the available smoke.
 **Method:** subagent-driven development (implementer → spec review → code-quality review → fix loop), per `docs/plans/2026-06-18-make-video-implementation.md`.
 
 ## Goal
