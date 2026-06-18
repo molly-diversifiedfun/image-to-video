@@ -25,7 +25,8 @@ Given a folder of many short clips, build a long video that shuffles them with s
 - FR-4: Crossfade every junction (video `xfade` + audio `acrossfade`), default 1.5s, `--xfade`.
 - FR-5: Normalize all clips to project resolution/fps before joining (mixed sources expected).
 - FR-6: Audio per shared model: clips' own audio crossfaded through the timeline by default; OR `--audio` file/folder replaces it (single loop / crossfaded playlist).
-- FR-7: PLAN must print the render-time/size estimate and that this mode re-encodes (set expectations).
+- FR-7: PLAN must print the render-time/size estimate and that this mode re-encodes. Because the estimate exceeds PREVIEW_THRESHOLD, the tool emits a short preview (first few junctions + `seam-check`) and requires explicit go/no-go before the multi-hour render; progress is reported during the full pass so it never looks hung.
+- FR-8: This mode ships LAST (architecture §7) — not started until the four fast modes are proven.
 
 ## 5. SOP (operational steps)
 
@@ -48,7 +49,7 @@ Given a folder of many short clips, build a long video that shuffles them with s
 
 ## 7. Risks / open questions
 
-- **Render time** is the headline risk — many unique seams force full re-encode (~1–2h for multi-hour 4K on Apple Silicon GPU). PLAN must warn; consider `--hardcut` (concat-copy, no crossfade) as a fast fallback for previews.
+- **Render time** is the headline risk — many unique seams force full re-encode (~1–2h for multi-hour 4K on Apple Silicon GPU), which collides with the "this tool is instant" expectation set by the fast modes. Mitigation: PLAN estimate + mandatory preview + explicit go/no-go + live progress; `--hardcut` (concat-copy, no crossfade) as a fast preview/fallback.
 - Wildly mismatched source fps/resolution → normalization cost + quality loss; document recommended uniform-ish inputs.
 - Memory/temp footprint for very long timelines — stream through, avoid materializing the whole thing in RAM.
 - Shuffle fairness across a long video (even clip distribution) — reshuffle-per-pass gives roughly even exposure; document.

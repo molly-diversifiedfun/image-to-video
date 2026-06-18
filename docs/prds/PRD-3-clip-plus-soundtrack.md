@@ -20,7 +20,7 @@ A short clip (e.g. drone footage) should be extended to a few hours and given a 
 ## 4. Functional requirements
 
 - FR-1: Accept one clip + target duration + `--audio PATH`.
-- FR-2: Video: seamless loop-extend (per PRD-2 engine).
+- FR-2: Video: loop-extend per PRD-2, including the `--loop` strategy choice, `seam-check`, and preview gate (a forward-moving drone needs `pingpong` or loop-native source for true seamlessness — see PRD-2 / architecture §3.2).
 - FR-3: Audio source resolution (shared model): `--audio` is a **file** → loop it to length with a soft seam; a **folder** → crossfaded playlist (sorted or `--shuffle`), looped to length.
 - FR-4: Default behavior with `--audio` here is **replace** the clip's native sound with the music (drone hum often unwanted); `--keep-native` to layer instead.
 - FR-5: Loudness-normalize the music bed to a consistent target.

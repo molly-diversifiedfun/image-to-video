@@ -12,4 +12,9 @@ Five features, one unified tool. Read the [architecture & process design](../pla
 
 Each PRD: Problem → Users → Use cases → Functional requirements → **SOP** (the ordered operational steps) → Acceptance criteria → Risks.
 
-Status: design approved 2026-06-18; not yet implemented. Implementation planning is the next step.
+Status: design approved 2026-06-18, then **red-teamed** (pre-mortem) the same day. Three findings folded in:
+1. "Seamless" is not free on arbitrary footage — measured a 28.6 dB crossfade-loop jump vs seamless pingpong. Now a `--loop {crossfade|pingpong|native}` choice with stated source requirements (architecture §3.2).
+2. A non-technical operator can't spot a subtly-broken multi-hour output — added a `seam-check` auto-QC + a PREVIEW go/no-go gate to the SOP (architecture §4).
+3. The slow/fragile mixer (PRD-4) is gated to ship last, behind the four fast modes (architecture §7).
+
+Not yet implemented. Implementation planning is the next step.
