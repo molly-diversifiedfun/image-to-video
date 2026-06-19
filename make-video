@@ -48,10 +48,14 @@
 set -euo pipefail
 
 readonly FPS=30                 # standard rate — YouTube re-encodes low fps poorly
-readonly CRF=18                 # static-mode quality (lower = better; 18 ≈ lossless)
+CRF=18                          # encode quality (lower = better; 18 ≈ lossless). --crf overrides.
 readonly BASE_SECS=30           # static-mode: length of the encoded-once base segment
-# 4K native. To output 1080p instead, change to: scale=1920:-2
-readonly SCALE="scale=trunc(iw/2)*2:trunc(ih/2)*2"
+# Output resolution. Default keeps the source's native size (just forces even
+# dims). --height N downscales to N px tall (keeping aspect), the biggest lever
+# on a multi-hour file's size (e.g. 4K→1080p ≈ 4× smaller).
+HEIGHT=0                        # 0 = keep native; >0 = scale to this height. Set by --height.
+LOOP_CRF=23                     # loop-extend unit quality (its own default; --crf overrides)
+SCALE="scale=trunc(iw/2)*2:trunc(ih/2)*2"
 readonly IMG_EXTS=(jpg jpeg png tif tiff bmp webp heic gif)
 
 # --- zoom (Ken Burns) settings ---
@@ -248,12 +252,23 @@ MIX_CLIP_SECS=0             # mix: cap each clip to N seconds (0 = whole clip)
 MIX_FILL=0                  # mix: 1 = crop-to-fill; 0 = letterbox (default)
 MIX_HARDCUT=0               # mix: 1 = concat with NO crossfade (fast preview/fallback)
 MIX_HOURS=""                # mix: target length in hours (alias for positional HOURS)
+OUT_FILE=""                 # explicit output FILE (set when --out names a *.mp4/.mov/.mkv)
 POS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dir)      MODE="dir";           DIR="$2";            shift 2;;
     --manifest) MODE="manifest";      MANIFEST="$2";       shift 2;;
-    --out)      OUTDIR="$2";          shift 2;;
+    --out)      OUTDIR="$2"
+                # If the value names a file (video extension), ALSO remember it
+                # as an explicit output FILE so single/loop modes write exactly
+                # there.  OUTDIR is left untouched so mix/slideshow (which treat
+                # --out as their own output path) keep working unchanged.
+                case "$2" in
+                  *.mp4|*.MP4|*.mov|*.MOV|*.mkv|*.MKV) OUT_FILE="$2";;
+                esac
+                shift 2;;
+    --crf)      CRF="$2"; LOOP_CRF="$2"; shift 2;;
+    --height)   HEIGHT="$2";          shift 2;;
     --jobs)     JOBS="$2";            shift 2;;
     --zoom)     ZOOM_PCT="$2";        shift 2;;
     --static)   ZOOM_PCT=0;           shift;;
@@ -304,6 +319,17 @@ if [[ "$SLIDESHOW" -eq 1 && "$ZOOM_PCT" != "0" ]]; then
   die "--zoom is not supported in slideshow mode"
 fi
 
+# Validate + apply quality / resolution knobs.
+[[ "$CRF" =~ ^[0-9]+$ ]] || die "--crf must be an integer (got: $CRF)"
+{ [[ "$CRF" -ge 0 && "$CRF" -le 51 ]]; } || die "--crf must be 0–51 (got: $CRF)"
+[[ "$HEIGHT" =~ ^[0-9]+$ ]] || die "--height must be an integer (got: $HEIGHT)"
+if [[ "$HEIGHT" -gt 0 ]]; then
+  # Downscale to HEIGHT px tall, keep aspect, force even width.
+  SCALE="scale=-2:${HEIGHT}"
+fi
+# Export so the sourced libs (loop, slideshow, mixer) pick up the same knobs.
+export CRF HEIGHT SCALE LOOP_CRF
+
 export SLIDESHOW_XFADE SLIDESHOW_SHUFFLE SLIDESHOW_SEED SLIDESHOW_FILL
 
 preflight   # verify ffmpeg/ffprobe exist before doing any work
@@ -347,9 +373,11 @@ if [[ -z "$JOBS" ]]; then
   else JOBS=$(( c >= 8 ? 4 : (c >= 4 ? 2 : 1) )); fi
 fi
 
-# In slideshow and mix modes, OUTDIR is the output FILE path (not a directory).
-# Skip the mkdir-p so we don't accidentally create "out.mp4" as a directory.
-if [[ "$SLIDESHOW" -eq 0 && "$MIX" -eq 0 && -n "$OUTDIR" ]]; then
+# In slideshow/mix modes OUTDIR is the output FILE path, and when --out names a
+# file (OUT_FILE set) OUTDIR is that file too — in both cases skip the mkdir-p
+# so we don't create "out.mp4" as a directory.  The single-mode dispatch makes
+# the parent dir for an explicit --out FILE itself.
+if [[ "$SLIDESHOW" -eq 0 && "$MIX" -eq 0 && -z "$OUT_FILE" && -n "$OUTDIR" ]]; then
   mkdir -p "$OUTDIR"
 fi
 export ZOOM_PCT                 # propagate to re-invoked single-mode children
@@ -400,6 +428,27 @@ loop_extend_mode() {
   local list_file="$tmp_dir/concat.txt"
 
   _cleanup_loop_tmp() { rm -rf "$tmp_dir"; }
+
+  # ------------------------------------------------------------------
+  # Step 1.5: resolution (--height) — pre-scale the source clip ONCE so every
+  # loop strategy (crossfade/pingpong/native) inherits the target size.  This
+  # is the biggest lever on a multi-hour file's size (4K→1080p ≈ 4× smaller).
+  # ------------------------------------------------------------------
+  if [[ "${HEIGHT:-0}" -gt 0 ]]; then
+    local scaled_clip="$tmp_dir/scaled_src.mp4"
+    if _loop_has_audio "$clip"; then
+      "$FFMPEG" -nostdin -loglevel error -y -i "$clip" \
+        -vf "scale=-2:${HEIGHT},format=yuv420p" \
+        -c:v libx264 -preset veryfast -crf "${LOOP_CRF:-23}" \
+        -c:a copy "$scaled_clip" || { _cleanup_loop_tmp; return 1; }
+    else
+      "$FFMPEG" -nostdin -loglevel error -y -i "$clip" \
+        -vf "scale=-2:${HEIGHT},format=yuv420p" \
+        -c:v libx264 -preset veryfast -crf "${LOOP_CRF:-23}" \
+        -an "$scaled_clip" || { _cleanup_loop_tmp; return 1; }
+    fi
+    clip="$scaled_clip"
+  fi
 
   # ------------------------------------------------------------------
   # Step 2: build the loop unit
@@ -676,15 +725,25 @@ case "$MODE" in
   # avoiding exported-function fragility. xargs -I{} uses newline as the only
   # delimiter, so spaces in paths (e.g. "/Volumes/1TB SSD/...") are safe.
   single)
-    [[ ${#POS[@]} -ge 2 ]] || die "usage: $0 FILE HOURS [OUTDIR]"
+    [[ ${#POS[@]} -ge 2 ]] || die "usage: $0 FILE HOURS [OUTDIR | --out FILE]"
+
+    # Resolve the output path.  Precedence: explicit --out FILE (e.g.
+    # --out rain-8h.mp4) wins; else a positional OUTDIR; else --out DIR; else
+    # next to the source.  --out FILE works in every mode now (loop-extend used
+    # to only accept a positional OUTDIR).
+    if [[ -n "$OUT_FILE" ]]; then
+      _out_target="$OUT_FILE"
+      mkdir -p "$(dirname "$OUT_FILE")"
+    else
+      _out_target="$(out_path "${POS[0]}" "${POS[2]:-$OUTDIR}")"
+    fi
 
     # Classify the input: if it's a video, enter loop-extend mode (PRD-2).
     _input_kind="$(classify_input "${POS[0]}" 2>/dev/null || echo "unknown")"
     if [[ "$_input_kind" == "video" ]]; then
-      loop_extend_mode "${POS[0]}" "${POS[1]}" \
-        "$(out_path "${POS[0]}" "${POS[2]:-$OUTDIR}")"
+      loop_extend_mode "${POS[0]}" "${POS[1]}" "$_out_target"
     else
-      make_one "${POS[0]}" "${POS[1]}" "$(out_path "${POS[0]}" "${POS[2]:-$OUTDIR}")"
+      make_one "${POS[0]}" "${POS[1]}" "$_out_target"
     fi
     ;;
   dir)

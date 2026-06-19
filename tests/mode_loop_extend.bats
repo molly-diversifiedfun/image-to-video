@@ -365,3 +365,61 @@ teardown() {
   [ "$status" -ne 0 ]
   echo "$output" | grep -qiE "(keep.native|audio)"
 }
+
+# ---------------------------------------------------------------------------
+# Test 14 — --out FILE writes exactly to the named file (loop-extend).
+#
+# Previously loop-extend only accepted a positional OUTDIR; --out FILE now
+# works in every mode.  The output must land at the exact path given, not at
+# <dir>/<source-stem>.mp4.
+# ---------------------------------------------------------------------------
+
+@test "loop-extend --out FILE: writes to the exact named file" {
+  local clip="$WORK_DIR/rain.mp4"
+  local out="$WORK_DIR/nested/sleep-loop.mp4"   # nested dir must be created
+  mk_clip "$clip" 220 3
+
+  run "$REPO_ROOT/make-video" "$clip" 0.005 --yes --out "$out"
+  [ "$status" -eq 0 ]
+  [ -f "$out" ]
+  assert_has_stream "$out" v
+  assert_duration "$out" 18 1.0
+}
+
+# ---------------------------------------------------------------------------
+# Test 15 — --height downscales the loop output (size control).
+#
+# The source is 320x180; --height 120 must produce a 120-px-tall output
+# (width scaled to keep aspect, forced even).  TEETH: a plain run stays 180.
+# ---------------------------------------------------------------------------
+
+@test "loop-extend --height 120: output is 120 px tall (downscaled)" {
+  local clip="$WORK_DIR/src.mp4"
+  local out="$WORK_DIR/small.mp4"
+  mk_clip "$clip" 220 3
+
+  run "$REPO_ROOT/make-video" "$clip" 0.005 --yes --height 120 --out "$out"
+  [ "$status" -eq 0 ]
+  [ -f "$out" ]
+
+  local h
+  h="$("$FFPROBE" -v error -select_streams v:0 \
+    -show_entries stream=height -of default=nw=1:nk=1 "$out")"
+  echo "output height: $h (expected 120, source was 180)"
+  [ "$h" -eq 120 ]
+}
+
+# ---------------------------------------------------------------------------
+# Test 16 — --crf validation: out-of-range value is rejected with a clear error.
+#
+# Bad quality input must fail fast at parse time, not produce a broken render.
+# ---------------------------------------------------------------------------
+
+@test "loop-extend --crf 99: rejected with a clear error (valid range 0–51)" {
+  local clip="$WORK_DIR/src.mp4"
+  mk_clip "$clip" 220 3
+
+  run "$REPO_ROOT/make-video" "$clip" 0.005 --yes --crf 99 --out "$WORK_DIR/o.mp4"
+  [ "$status" -ne 0 ]
+  echo "$output" | grep -qiE "crf"
+}
