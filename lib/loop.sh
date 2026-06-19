@@ -186,7 +186,7 @@ _loop_pingpong() {
       -i "$clip" \
       -vf "reverse" \
       -af "areverse" \
-      -c:v libx264 -preset ultrafast -crf 23 \
+      -c:v libx264 -preset ultrafast -crf ${LOOP_CRF:-23} \
       -c:a aac -b:a 64k \
       -pix_fmt yuv420p \
       "$tmp_rev" || { rm -f "$tmp_rev"; echo "loop_unit: pingpong reverse encode failed" >&2; return 1; }
@@ -197,7 +197,7 @@ _loop_pingpong() {
       -i "$clip" \
       -vf "reverse" \
       -an \
-      -c:v libx264 -preset ultrafast -crf 23 \
+      -c:v libx264 -preset ultrafast -crf ${LOOP_CRF:-23} \
       -pix_fmt yuv420p \
       "$tmp_rev" || { rm -f "$tmp_rev"; echo "loop_unit: pingpong reverse encode failed" >&2; return 1; }
   fi
@@ -328,7 +328,7 @@ _loop_crossfade() {
       " \
       -map "[vout]" \
       -map "[aout]" \
-      -c:v libx264 -preset ultrafast -crf 23 \
+      -c:v libx264 -preset ultrafast -crf ${LOOP_CRF:-23} \
       -c:a aac -b:a 64k \
       -pix_fmt yuv420p \
       "$out" || { echo "loop_unit: crossfade encode failed" >&2; return 1; }
@@ -346,7 +346,7 @@ _loop_crossfade() {
       " \
       -map "[vout]" \
       -an \
-      -c:v libx264 -preset ultrafast -crf 23 \
+      -c:v libx264 -preset ultrafast -crf ${LOOP_CRF:-23} \
       -pix_fmt yuv420p \
       "$out" || { echo "loop_unit: crossfade encode failed" >&2; return 1; }
   fi

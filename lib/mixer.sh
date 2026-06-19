@@ -57,9 +57,19 @@ _mix_has_audio() {
 }
 
 # Common encode flags so every segment is concat-copy compatible.
+# With MIX_GPU=1 (set by --gpu) the video is encoded on Apple Silicon's
+# VideoToolbox hardware encoder instead of CPU libx264 — much faster on the
+# re-encode-heavy mix mode.  VideoToolbox is rate-controlled by bitrate, not
+# CRF, so quality is set via MIX_GPU_BITRATE (default 12M).  Audio params and
+# resolution/fps/pix_fmt stay identical so segments remain concat-copy safe.
 _mix_enc() {
-  printf '%s' "-c:v libx264 -preset veryfast -crf ${CRF} -r ${FPS} \
+  if [[ "${MIX_GPU:-0}" -eq 1 ]]; then
+    printf '%s' "-c:v h264_videotoolbox -b:v ${MIX_GPU_BITRATE:-12M} -r ${FPS} \
 -pix_fmt yuv420p -c:a aac -ar 44100 -ac 2"
+  else
+    printf '%s' "-c:v libx264 -preset veryfast -crf ${CRF} -r ${FPS} \
+-pix_fmt yuv420p -c:a aac -ar 44100 -ac 2"
+  fi
 }
 
 # _mix_normalize SRC OUT PW PH FILL CAP  — re-encode SRC to project params.

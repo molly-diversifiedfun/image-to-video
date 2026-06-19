@@ -33,8 +33,14 @@ The tool finds ffmpeg/ffprobe automatically: it prefers a copy bundled in `bin/`
 # A short video clip → stretched to 8h with a truly-seamless loop
 ./make-video clip.mov 8 --loop pingpong
 
+# An 8h rain loop: smooth 5s dissolve, fade from/to black, 1080p, exact filename
+./make-video rain.mov 8 --xfade 5 --fade 3 --height 1080 --out rain-8h.mp4
+
 # A folder of images → ONE long video, each image holds then dissolves into the next
 ./make-video ./images --slideshow --each 1 --out slideshow.mp4
+
+# A folder of CLIPS, mixed, encoded fast on Apple Silicon
+./make-video ./clips --mix 4 --gpu --out mixed.mp4
 
 # A folder of CLIPS → ONE long video, shuffled with crossfades to fill a target length
 ./make-video ./clips --mix 4 --out mixed.mp4              # 4 hours, default 1.5s crossfades
@@ -68,13 +74,19 @@ The tool auto-detects the input: a **photo** → still mode; a **video clip** �
 | `--clip-secs N` | Mix: cap each clip to N seconds (default: whole clip). |
 | `--hardcut` | Mix: concat clips with **no** crossfade — a fast preview/fallback that skips the re-encode. |
 | `--loop MODE` | Video-clip looping: `pingpong` (truly seamless, but reverses motion — unusable for rain/falling motion), `crossfade` (default; the clip's tail dissolves into its head **across the loop seam**, so it flows continuously with no flash and no backward jump — the right choice when the source can't be reversed), `native` (source already loops). |
-| `--xfade SECS` | Crossfade/seam duration (loop-extend default 1.0s; slideshow 2.5s; mix 1.5s). For loop-extend, a longer window (e.g. `--xfade 5`) makes the dissolve smoother; the clip must be ≥ 3× the window (a 5s dissolve needs a ≥15s clip). |
+| `--xfade SECS` | Crossfade/seam duration (loop-extend default 1.0s; slideshow 2.5s; mix 1.5s). For loop-extend, a longer window (e.g. `--xfade 5`) makes the dissolve smoother; the clip must be ≥ 3× the window (a 5s dissolve needs a ≥15s clip). An oversized window on a short clip is **clamped to the largest that fits** (with a note) rather than erroring. |
+| `--fade SECS` | Fade up from black at the start and down to black at the end — **video AND audio**, `SECS` each. The top-and-tail polish for ambient/sleep loops. Re-encodes only the two ends and stream-copies the middle, so a multi-hour file stays fast. Works in loop-extend, still, and mix. |
+| `--crf N` | Encode quality, 0–51 (lower = better/larger). Applies across modes; loop-extend keeps its own default of 23 unless `--crf` is given. |
+| `--height N` | Downscale output to N px tall (keep aspect, even width). The biggest lever on a multi-hour file's size — e.g. `--height 1080` on a 4K source is ~4× smaller. |
+| `--gpu` | **Mix mode:** encode on Apple Silicon **VideoToolbox** (`h264_videotoolbox`) instead of CPU libx264 — much faster on the re-encode-heavy mix. Falls back to CPU with a note if unavailable. Loop-extend is already copy-based (length-independent), so it needs no GPU. |
 | `--yes` | Skip the seam/preview go/no-go gate and render immediately (loop-extend + mix; for scripts/batch). |
 | `--zoom N` | Add a slow continuous zoom of N% over a **photo**. **Re-encodes every frame** (GPU/VideoToolbox), so it's slow: a 3h file takes ~1.5–2h instead of ~90s. |
-| `--out DIR` | Write `.mp4`s to `DIR` instead of next to the source. |
+| `--out DIR \| FILE` | Write to `DIR` (named after the source) **or** to an exact `FILE` (e.g. `--out rain-8h.mp4`, parent dir auto-created). `--out FILE` works in every mode. |
 | `--jobs N` | Concurrency. Omit it — auto-picked by mode. |
 | `--static` | Force the fast no-zoom path (the default for photos). |
 | `-h`, `--help` | Full usage. |
+
+Loop-extend and mix print the actual **wall-clock render time** (`rendered in Ns`) on completion; mix also prints an up-front size/time estimate and which encoder (CPU/GPU) it will use.
 
 **Loop-extend** prints a seam-quality verdict (`SEAMLESS` / `SOFT` / `VISIBLE`) and a short preview clip before the full render, and recommends `--loop pingpong` when the seam isn't truly seamless. With the seam-spanning crossfade construction, `crossfade` now reports `SEAMLESS` on most content. It never blocks in a non-TTY/`--yes` context.
 

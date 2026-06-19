@@ -128,7 +128,24 @@ D)  A SHORT VIDEO CLIP  →  stretched to hours (seamless loop)
         --xfade 5          5-second cross dissolve (default is 1s).
                            Longer = smoother. The clip must be at
                            least 3× the fade, so a 5s dissolve needs
-                           a clip of 15 seconds or more.
+                           a clip of 15 seconds or more. (If your clip
+                           is too short it just uses the longest fade
+                           that fits and tells you — it won't error.)
+
+   Nice finishing touches for a sleep/rain video:
+        --fade 3           ease in from black at the start and out to
+                           black at the end — picture AND sound.
+        --height 1080      make the file much smaller (good for 8h+).
+        --out rain-8h.mp4  save it with the exact name you want.
+
+   A full example:
+        bash "<make-video>" "<rain clip>" 8 --xfade 5 --fade 3 \
+             --height 1080 --out "<rain-8h.mp4>"
+
+   How long does it take? A looped clip is FAST no matter how long —
+   8 hours renders in about the same time as 1 hour (it copies the
+   clip instead of re-drawing every frame). It prints "rendered in Ns"
+   when done.
 
    Before it makes the full file, it shows you a quick PREVIEW of
    the loop point and says how seamless it looks, so you can stop
@@ -212,11 +229,21 @@ Examples:
   --order name        mix: keep filename order (default is shuffle)
   --seed 7            slideshow/mix: repeatable random order
   --xfade 2           length of the fade/crossfade, in seconds
+  --fade 3            fade in from black at the start AND out to black at
+                      the end (picture and sound). Great for sleep/rain
+                      videos so they don't start or stop abruptly.
+  --height 1080       shrink the picture to this many pixels tall. The
+                      easiest way to make a long file much smaller
+                      (1080 = "1080p"; a 4K clip becomes ~4x smaller).
+  --crf 23            quality dial, 0-51. Lower = better but bigger.
+  --gpu               mix only: use the Mac's video chip to render much
+                      faster (great on an M-series Mac).
   --clip-secs 30      mix: use only the first N seconds of each clip
   --fill              crop odd-shaped inputs to fill (no black bars)
   --hardcut           mix: no crossfades (faster rough version)
   --zoom 4            photo: slow gentle zoom (SLOW — re-processes)
-  --out "<path>"      where to save the finished file/files
+  --out "<path>"      where to save it: a folder, OR an exact file name
+                      like  rain-8h.mp4  (works for every mode now)
   --jobs 4            how many to make at once (leave it off — it's automatic)
   --yes               skip the preview/"are you sure" question
   --help              show the built-in help

@@ -242,6 +242,32 @@ mk_clip_dir() {
   [[ "$output" == *"directory of clips"* ]]
 }
 
+# ---------------------------------------------------------------------------
+# T9 — --gpu routes the mix re-encode through VideoToolbox and still produces a
+#      valid, concat-copy-clean output. On a machine without VideoToolbox the
+#      tool falls back to CPU with a note; either way the render must succeed
+#      and report wall-clock elapsed time. Also covers the new "rendered in Ns"
+#      readout and the encoder line in the plan.
+# ---------------------------------------------------------------------------
+@test "mix --gpu: renders a valid file (VideoToolbox or CPU fallback) + reports elapsed" {
+  local dir="$WORK_DIR/clips" out="$WORK_DIR/gpu.mp4"
+  mk_clip_dir "$dir"
+  run "$REPO_ROOT/make-video" "$dir" --mix 0.00167 \
+      --xfade 1.0 --order name --gpu --out "$out" --yes
+  [ "$status" -eq 0 ]
+  [ -f "$out" ]
+  assert_has_stream "$out" v
+  assert_has_stream "$out" a
+  assert_duration "$out" 7.0 0.5
+  [[ "$output" == *"encoder:"* ]]        # plan shows which encoder
+  [[ "$output" == *"rendered in"* ]]     # elapsed readout
+  # h264 either way (VideoToolbox H.264 or libx264)
+  local vcodec
+  vcodec="$("$FFPROBE" -v error -select_streams v:0 \
+    -show_entries stream=codec_name -of default=nw=1:nk=1 "$out")"
+  [ "$vcodec" = "h264" ]
+}
+
 @test "mix: --clip-secs cap increases the clip count needed" {
   local dir="$WORK_DIR/clips"; mk_clip_dir "$dir"
   local log="$WORK_DIR/order.txt"
