@@ -253,6 +253,7 @@ MIX_FILL=0                  # mix: 1 = crop-to-fill; 0 = letterbox (default)
 MIX_HARDCUT=0               # mix: 1 = concat with NO crossfade (fast preview/fallback)
 MIX_HOURS=""                # mix: target length in hours (alias for positional HOURS)
 OUT_FILE=""                 # explicit output FILE (set when --out names a *.mp4/.mov/.mkv)
+MIX_GPU=0                   # 1 = encode mix on Apple Silicon VideoToolbox (--gpu)
 POS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -294,6 +295,7 @@ while [[ $# -gt 0 ]]; do
       esac;;
     --clip-secs)   MIX_CLIP_SECS="$2"; shift 2;;
     --hardcut)     MIX_HARDCUT=1;     shift;;
+    --gpu)         MIX_GPU=1;         shift;;
     -h|--help)  sed -n '2,40p' "$0"; exit 0;;
     -*)         die "unknown flag: $1";;
     *)          POS+=("$1");          shift;;
@@ -329,6 +331,16 @@ if [[ "$HEIGHT" -gt 0 ]]; then
 fi
 # Export so the sourced libs (loop, slideshow, mixer) pick up the same knobs.
 export CRF HEIGHT SCALE LOOP_CRF
+
+# --gpu: verify VideoToolbox is actually available; if not, warn and fall back
+# to the CPU encoder rather than failing the whole render.
+if [[ "$MIX_GPU" -eq 1 ]]; then
+  if ! "$FFMPEG" -hide_banner -encoders 2>/dev/null | grep -q "h264_videotoolbox"; then
+    printf 'note: --gpu requested but h264_videotoolbox is unavailable; using the CPU encoder.\n' >&2
+    MIX_GPU=0
+  fi
+fi
+export MIX_GPU
 
 export SLIDESHOW_XFADE SLIDESHOW_SHUFFLE SLIDESHOW_SEED SLIDESHOW_FILL
 
@@ -404,6 +416,7 @@ loop_extend_mode() {
   local clip="$1"
   local hours="$2"
   local out="$3"
+  local _t0=$SECONDS   # wall-clock start, for the "rendered in Ns" readout
 
   [[ -f "$clip" ]] || die "no such file: $clip"
 
@@ -659,9 +672,9 @@ loop_extend_mode() {
   else
     audio_label="(native)"
   fi
-  printf '✓ %s  (%sh = %ss, loop %s, xfade %ss, audio %s)  ->  %s\n' \
+  printf '✓ %s  (%sh = %ss, loop %s, xfade %ss, audio %s, rendered in %ss)  ->  %s\n' \
     "$(basename "$clip")" "$hours" "$target_secs" "$LOOP_STRATEGY" "$LOOP_XFADE" \
-    "$audio_label" "$out"
+    "$audio_label" "$(( SECONDS - _t0 ))" "$out"
 }
 
 # ---------------------------------------------------------------------------
@@ -676,6 +689,7 @@ loop_extend_mode() {
 # ---------------------------------------------------------------------------
 mix_mode() {
   local dir="$1" hours="$2" out="$3"
+  local _t0=$SECONDS   # wall-clock start, for the "rendered in Ns" readout
   [[ -d "$dir" ]] || die "no such directory: $dir"
   [[ -n "$out" ]] || die "--mix requires --out FILE"
 
@@ -706,6 +720,7 @@ mix_mode() {
 
   printf '[mix] PLAN — this mode RE-ENCODES every clip (slow).\n'
   printf '  target: %ss (%sh)  resolution: %sx%s\n' "$target_secs" "$hours" "$pw" "$ph"
+  printf '  encoder: %s\n' "$( [[ "${MIX_GPU:-0}" -eq 1 ]] && echo 'GPU (VideoToolbox) — faster' || echo 'CPU (libx264); add --gpu for hardware encoding' )"
   printf '  estimated output size: ~%sMB\n' "$est_mb"
   printf '  estimated render time: ~%s–%s min (rough; depends on machine/GPU)\n' "$est_lo" "$est_hi"
 
@@ -739,7 +754,10 @@ mix_mode() {
   fi
   rm -rf "$preview_dir"
 
-  mix_clips "$dir" "$hours" "$out"
+  mix_clips "$dir" "$hours" "$out" || return 1
+  printf '✓ mix  (%ss, %s)  rendered in %ss  ->  %s\n' \
+    "$target_secs" "$( [[ "${MIX_GPU:-0}" -eq 1 ]] && echo 'GPU' || echo 'CPU' )" \
+    "$(( SECONDS - _t0 ))" "$out"
 }
 
 case "$MODE" in
