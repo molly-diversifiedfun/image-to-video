@@ -42,6 +42,23 @@
 #   (slow): it prints a size/time estimate, renders a short preview, and asks
 #   go/no-go before the full render. --hardcut skips crossfades (fast fallback).
 #
+# Output, quality & polish (all modes unless noted):
+#     --out FILE     write exactly to FILE (e.g. --out rain-8h.mp4). Works in
+#                    every mode now; a bare directory still works too.
+#     --crf N        encode quality, 0–51 (lower = better/larger). Loop-extend
+#                    keeps its own default of 23 unless --crf is given.
+#     --height N     downscale output to N px tall (keep aspect). Biggest lever
+#                    on a multi-hour file's size, e.g. --height 1080.
+#     --fade S       fade up from black at the start and down to black at the
+#                    end (video AND audio), S seconds each. The top-and-tail
+#                    polish for ambient/sleep loops. Re-encodes only the ends.
+#     --gpu          (mix mode) encode on Apple Silicon VideoToolbox instead of
+#                    CPU — much faster on the re-encode-heavy mix. Loop-extend
+#                    is already copy-based, so it needs no GPU.
+#
+# Loop-extend note: a too-large --xfade for a short clip is clamped to the
+# largest dissolve that fits (with a note) instead of erroring.
+#
 # HOURS may be fractional (0.5 = 30 min, 0.0167 ≈ 1 min).
 # Point at a FOLDER instead of a file to batch the whole directory in parallel.
 
@@ -319,7 +336,7 @@ while [[ $# -gt 0 ]]; do
     --hardcut)     MIX_HARDCUT=1;     shift;;
     --gpu)         MIX_GPU=1;         shift;;
     --fade)        FADE="$2";         shift 2;;
-    -h|--help)  sed -n '2,40p' "$0"; exit 0;;
+    -h|--help)  sed -n '2,62p' "$0"; exit 0;;
     -*)         die "unknown flag: $1";;
     *)          POS+=("$1");          shift;;
   esac
