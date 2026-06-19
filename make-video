@@ -65,14 +65,17 @@
 set -euo pipefail
 
 readonly FPS=30                 # standard rate — YouTube re-encodes low fps poorly
-CRF=18                          # encode quality (lower = better; 18 ≈ lossless). --crf overrides.
+# These read the environment first (then fall back to defaults) so the values
+# propagate to the per-image child processes that batch (--dir) / manifest mode
+# re-invoke — those children inherit only env, not the original flags.
+CRF="${CRF:-18}"                # encode quality (lower = better; 18 ≈ lossless). --crf overrides.
 readonly BASE_SECS=30           # static-mode: length of the encoded-once base segment
 # Output resolution. Default keeps the source's native size (just forces even
 # dims). --height N downscales to N px tall (keeping aspect), the biggest lever
 # on a multi-hour file's size (e.g. 4K→1080p ≈ 4× smaller).
-HEIGHT=0                        # 0 = keep native; >0 = scale to this height. Set by --height.
-LOOP_CRF=23                     # loop-extend unit quality (its own default; --crf overrides)
-SCALE="scale=trunc(iw/2)*2:trunc(ih/2)*2"
+HEIGHT="${HEIGHT:-0}"           # 0 = keep native; >0 = scale to this height. Set by --height.
+LOOP_CRF="${LOOP_CRF:-23}"      # loop-extend unit quality (its own default; --crf overrides)
+SCALE="${SCALE:-scale=trunc(iw/2)*2:trunc(ih/2)*2}"
 readonly IMG_EXTS=(jpg jpeg png tif tiff bmp webp heic gif)
 
 # --- zoom (Ken Burns) settings ---
@@ -292,7 +295,8 @@ MIX_HARDCUT=0               # mix: 1 = concat with NO crossfade (fast preview/fa
 MIX_HOURS=""                # mix: target length in hours (alias for positional HOURS)
 OUT_FILE=""                 # explicit output FILE (set when --out names a *.mp4/.mov/.mkv)
 MIX_GPU=0                   # 1 = encode mix on Apple Silicon VideoToolbox (--gpu)
-FADE=0                      # fade-in/out seconds at the file's start AND end (--fade)
+FADE="${FADE:-0}"           # fade-in/out seconds at the file's start AND end (--fade);
+                            # env-aware so it reaches batch/manifest child processes
 POS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -370,8 +374,10 @@ if [[ "$HEIGHT" -gt 0 ]]; then
   # Downscale to HEIGHT px tall, keep aspect, force even width.
   SCALE="scale=-2:${HEIGHT}"
 fi
-# Export so the sourced libs (loop, slideshow, mixer) pick up the same knobs.
-export CRF HEIGHT SCALE LOOP_CRF
+# Export so the sourced libs (loop, slideshow, mixer) pick up the same knobs,
+# AND so batch/manifest child processes inherit them (they re-invoke this script
+# with only the image/hours/outdir, not the original --crf/--height/--fade flags).
+export CRF HEIGHT SCALE LOOP_CRF FADE
 
 # --gpu: verify VideoToolbox is actually available; if not, warn and fall back
 # to the CPU encoder rather than failing the whole render.
@@ -845,6 +851,8 @@ case "$MODE" in
       [[ -n "$EACH_HOURS" ]] || die "--slideshow requires HOURS or --each HOURS"
       [[ -n "$OUTDIR" ]] || die "--slideshow requires --out OUTDIR"
       xfade_join "$DIR" "$EACH_HOURS" "$OUTDIR"
+      # Top-and-tail fade, if --fade was given (xfade_join doesn't know about it).
+      _finalize_fades "$OUTDIR" || true
     else
       # Batch mode (default): each image → its own video (existing behaviour).
       [[ ${#POS[@]} -ge 1 ]] || die "--dir mode needs HOURS: $0 --dir DIR HOURS"
