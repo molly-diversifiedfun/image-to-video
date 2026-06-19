@@ -7,8 +7,8 @@
 # compares it to a LOCAL baseline taken ~10 frames before.
 #
 # Verdict thresholds (drop = baseline_psnr - boundary_psnr):
-#   drop <= 8 dB  → SEAMLESS (pingpong strategy)
-#   8 < drop <= 18 dB → SOFT   (crossfade strategy; flash hidden, content jump)
+#   drop <= 8 dB  → SEAMLESS (pingpong, or a seam-spanning crossfade loop)
+#   8 < drop <= 18 dB → SOFT   (faint residual blend on sharp/high-motion content)
 #   drop > 18 dB       → VISIBLE (hard cut / obvious jump)
 #
 # Return codes:
@@ -17,11 +17,13 @@
 #
 # Empirically observed on mk_clip (smooth gradient source, 30 fps):
 #   pingpong wrap boundary    : drop ≈ 0–3 dB  → SEAMLESS
-#   crossfade join boundary   : drop ≈ 15–22 dB → SOFT (most runs) or VISIBLE edge
+#   crossfade join boundary   : drop ≈ 1–2 dB  → SEAMLESS (seam-spanning dissolve,
+#                               no backward content jump; was ~15–22 dB before the
+#                               body-start-at-X fix)
 #   hard-cut (solid color)    : drop ≈ 30–50 dB → VISIBLE
 #
-# NOTE: crossfade drop can land in the SOFT-VISIBLE borderzone (~18 dB).
-# Test 3 therefore asserts NOT SEAMLESS, which is the safety property.
+# NOTE: Test 3 asserts the crossfade seam is SEAMLESS — the fix's contract.
+# Test 2 (hard cut → VISIBLE) keeps the teeth on seam_check's discrimination.
 
 REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 
@@ -183,16 +185,21 @@ _frame_count() {
 }
 
 # ---------------------------------------------------------------------------
-# Test 3: crossfade join boundary → NOT SEAMLESS (SOFT or VISIBLE)
+# Test 3: crossfade join boundary → NOT VISIBLE (continuous seam, no jump)
 #
-# The crossfade strategy hides the flash but cannot produce a truly seamless
-# content match.  seam_check must NOT return SEAMLESS for the join.
+# REGRESSION GUARD for the seam-spanning crossfade fix.  The loop unit is built
+# so its first and last frames are the SAME source frame (CLIP@xfade): the real
+# tail dissolves into the real head ACROSS the seam, with no backward content
+# jump.  On the smooth-gradient fixture that makes the join continuous —
+# seam_check must report SEAMLESS or SOFT, NEVER VISIBLE.
 #
-# We accept SOFT or VISIBLE; we only reject SEAMLESS.
-# Document the measured drop in the test output for diagnostics.
+# (The earlier build dissolved into the head but then restarted the unit at
+# content 0, leaving a 1 s backward jump that read as VISIBLE/large drop.  This
+# test asserts that jump is gone.)  Test 2 (hard cut → VISIBLE) keeps the teeth
+# on seam_check itself so this is not just rubber-stamping every input.
 # ---------------------------------------------------------------------------
 
-@test "seam_check: crossfade boundary is NOT SEAMLESS (SOFT or VISIBLE)" {
+@test "seam_check: crossfade boundary is SEAMLESS (seam-spanning dissolve, no backward jump)" {
   local clip="$WORK_DIR/clip.mp4"
   local unit="$WORK_DIR/unit_xf.mp4"
   local tiled="$WORK_DIR/tiled_xf.mp4"
@@ -210,8 +217,11 @@ _frame_count() {
   [ "$status" -eq 0 ]
 
   echo "output: $output"
-  # Must NOT be SEAMLESS; SOFT or VISIBLE are both acceptable here
-  [[ "$output" != *"SEAMLESS"* ]]
+  # TEETH: the OLD construction restarted the unit at content 0 after dissolving
+  # into the head, leaving a 1 s backward jump → SOFT/VISIBLE here.  The fix
+  # starts the body at content X so the seam joins content-X to content-X with
+  # the dissolve straddling it → drop collapses to ~1 dB → SEAMLESS.
+  [[ "$output" == *"SEAMLESS"* ]]
 }
 
 # ---------------------------------------------------------------------------

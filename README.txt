@@ -113,11 +113,22 @@ D)  A SHORT VIDEO CLIP  →  stretched to hours (seamless loop)
    Two ways to loop (this matters — see the next section):
         --loop pingpong    plays forward then backward. TRULY
                            invisible join. Best for water, clouds,
-                           fog, smoke, abstract motion.
-        --loop crossfade   (default) softly blends the loop point.
-                           Use for clips that move one direction
-                           (like a drone flying forward) so it
-                           doesn't look like it rewinds.
+                           fog, smoke, abstract motion. DON'T use it
+                           for rain or anything falling — backward
+                           rain falls UP and looks wrong.
+        --loop crossfade   (default) the end of the clip dissolves
+                           into the beginning right at the loop
+                           point, so it flows continuously with no
+                           rewind and no hard cut. This is the one
+                           to use for RAIN, snow, traffic, a drone
+                           flying forward — anything that can't be
+                           reversed.
+
+   Make the dissolve longer for a softer, smoother handoff:
+        --xfade 5          5-second cross dissolve (default is 1s).
+                           Longer = smoother. The clip must be at
+                           least 3× the fade, so a 5s dissolve needs
+                           a clip of 15 seconds or more.
 
    Before it makes the full file, it shows you a quick PREVIEW of
    the loop point and says how seamless it looks, so you can stop

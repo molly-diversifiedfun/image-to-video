@@ -14,20 +14,21 @@
 #     reversed segment equals the last frame of the forward segment, so
 #     adjacent-frame PSNR at the boundary matches mid-clip baseline PSNR.
 #
-#   crossfade  (default)
-#     OUT = a unit whose tail crossfades into its head using ffmpeg's xfade
-#     video filter and acrossfade audio filter.  When concat-copied, the
-#     hard-cut FLASH is eliminated and boundary PSNR is measurably higher
-#     than a naive hard concat.
+#     crossfade  (default)
+#     OUT = a loop unit whose REAL tail dissolves into its REAL head over the
+#     xfade window, with the dissolve landing on the loop seam.  Built so the
+#     unit's first and last frames are the SAME source frame (CLIP@xfade):
+#     concat-copies then join seam-to-seam with NO hard-cut flash and NO
+#     backward content jump, and the dissolve straddles the boundary.
 #
-#     NOTE: a content jump remains for directional motion content because the
-#     tail frames and head frames show different positions in the scene — only
-#     the visual discontinuity (flash) is removed.  Do NOT assert seamlessness
-#     for this strategy on directional motion.  It DOES improve on a raw hard
-#     cut (measured ≈28–32 dB vs ≈12–18 dB on smooth gradient content).
+#     This is the strategy to use when the source CANNOT be reversed (rain,
+#     falling/directional motion) so pingpong is unusable.  The seam is a
+#     blend, not a pixel-identical match, so on sharp high-motion content a
+#     faint dissolve may still be perceptible — widen the window (e.g.
+#     --xfade 5) to make it imperceptible.
 #
-#     CLIP must be at least 3× xfade duration.  Shorter clips are rejected
-#     with a non-zero exit and a diagnostic message on stderr.
+#     CLIP must be at least 3× xfade duration (a 5 s dissolve needs a ≥15 s
+#     clip).  Shorter clips are rejected with a non-zero exit + stderr.
 #
 #   native
 #     OUT = CLIP as-is (stream copy).  The caller asserts that the source
@@ -236,24 +237,35 @@ _loop_pingpong() {
 # ---------------------------------------------------------------------------
 # _loop_crossfade CLIP OUT HAS_AUDIO XFADE
 #
-# Build OUT = a unit whose tail crossfades into its head so that
-# concat-copies have no hard-cut flash.
+# Build OUT = a loop unit whose REAL tail dissolves into its REAL head, with
+# the dissolve landing exactly on the loop seam — so concat-copies flow
+# continuously with NO hard-cut flash AND NO backward content jump.
 #
-# Technique:
-#   Let D = CLIP duration.  The crossfade window = XFADE seconds.
-#   We encode OUT as a clip of duration (D - XFADE):
-#     - Video: xfade filter transitions from the end of CLIP back to the
-#       start of CLIP over XFADE seconds (offset = D - 2*XFADE so the
-#       transition finishes at D - XFADE).
-#     - Audio: acrossfade of tail and head.
+# Technique (standard seamless-crossfade-loop construction):
+#   Let D = CLIP duration, X = XFADE window.  The unit is built from:
+#     - body : CLIP[X .. D]          (content X..D, length D - X)
+#     - head : CLIP[0 .. X]          (content 0..X, the fade-in target)
+#   xfade(body, head) with offset = D - 2*X dissolves the body's last X
+#   seconds (= CLIP's real tail, content D-X..D) into the head (content 0..X)
+#   over X seconds, finishing exactly at the unit's end (D - X).
 #
-#   When two copies of OUT are concat-copied, the head of the second copy
-#   immediately follows the crossfaded tail of the first, so there is no
-#   visible flash at the join point.  A content jump may still occur for
-#   directional motion — this is documented and acceptable.
+#   Crucially the body STARTS at content X and the dissolve ENDS at content X,
+#   so the unit's first and last frames are the SAME source frame (CLIP@X).
+#   When copies are concat-copied the seam joins content-X to content-X: the
+#   playhead never jumps backward, and the X-second dissolve straddles the
+#   boundary (tail-of-pass-N dissolving into head-of-pass-N+1).
 #
-# Requirement: D >= 3 * XFADE (so the xfade offset is positive and the
-# head/tail segments don't overlap into the body).
+#   This is the right tool when the source CANNOT be reversed (e.g. rain,
+#   falling motion) so pingpong is unusable.  Unlike pingpong the seam is a
+#   blend, not a pixel-identical match, so on sharp high-motion content a
+#   faint dissolve is still perceptible — widen XFADE (e.g. --xfade 5) to make
+#   it imperceptible.  The previous build dissolved into the head but then
+#   restarted the unit at content 0, leaving an X-second backward JUMP at the
+#   seam (the "abrupt cut"); starting the body at content X removes it.
+#
+# Requirement: D >= 3 * XFADE (offset stays positive and at least X seconds of
+# clean body remains between the seam and the dissolve).  So a 5 s dissolve
+# needs a source clip of at least 15 s.
 # ---------------------------------------------------------------------------
 _loop_crossfade() {
   local clip="$1"
@@ -286,19 +298,18 @@ _loop_crossfade() {
 
   # The crossfade unit is built as follows:
   #
-  #   Input 0: full CLIP           (provides the "body" = frames 0..D-XFADE)
-  #   Input 1: CLIP trimmed to the first XFADE seconds  (the "head", re-played
-  #            as the fade-in target for the closing transition)
+  #   body : [0:v]/[0:a] trimmed to start=XFADE  → CLIP[X..D] (content X..D)
+  #   head : [1:v]/[1:a] trimmed to 0..XFADE     → CLIP[0..X] (content 0..X)
   #
-  # xfade offset = D - 2*XFADE: the transition begins here in input 0's timeline
-  # and runs for XFADE seconds, ending at D - XFADE.
+  # xfade/acrossfade(body, head) with offset = D - 2*XFADE (body-local time):
+  # the body plays clean for D - 2*XFADE seconds (content X..D-X), then its
+  # last XFADE seconds (content D-X..D, the real tail) dissolve into the head
+  # (content 0..X) over XFADE seconds, finishing at body-local D - XFADE.
   #
-  # We then trim the xfade output to out_dur = D - XFADE so the unit length is
-  # shorter than the source.  When concat-copies follow, the head of the next
-  # copy immediately continues from the very start of the clip, with no flash.
-  #
-  # The -t flag (not trim filter) is used to cap the output at out_dur after
-  # the filtergraph completes, which is the most reliable way to truncate.
+  # xfade output length = body_len + head_len - XFADE = (D-X) + X - X = D - X,
+  # which equals out_dur; the trailing trim only guards fps rounding.  Because
+  # the unit begins at content X and ends at content X, concat-copies join
+  # seam-to-seam with no backward jump and the dissolve straddles the boundary.
 
   if [[ "$has_audio" -eq 1 ]]; then
     "$FFMPEG" \
@@ -306,11 +317,13 @@ _loop_crossfade() {
       -i "$clip" \
       -i "$clip" \
       -filter_complex "
+        [0:v]trim=start=${xfade},setpts=PTS-STARTPTS[vbody];
         [1:v]trim=start=0:end=${xfade},setpts=PTS-STARTPTS[vhead];
-        [0:v][vhead]xfade=transition=fade:duration=${xfade}:offset=${xfade_offset}[vxf];
+        [vbody][vhead]xfade=transition=fade:duration=${xfade}:offset=${xfade_offset}[vxf];
         [vxf]trim=start=0:end=${out_dur},setpts=PTS-STARTPTS[vout];
+        [0:a]atrim=start=${xfade},asetpts=PTS-STARTPTS[abody];
         [1:a]atrim=start=0:end=${xfade},asetpts=PTS-STARTPTS[ahead];
-        [0:a][ahead]acrossfade=d=${xfade}:c1=tri:c2=tri[axf];
+        [abody][ahead]acrossfade=d=${xfade}:c1=tri:c2=tri[axf];
         [axf]atrim=start=0:end=${out_dur},asetpts=PTS-STARTPTS[aout]
       " \
       -map "[vout]" \
@@ -326,8 +339,9 @@ _loop_crossfade() {
       -i "$clip" \
       -i "$clip" \
       -filter_complex "
+        [0:v]trim=start=${xfade},setpts=PTS-STARTPTS[vbody];
         [1:v]trim=start=0:end=${xfade},setpts=PTS-STARTPTS[vhead];
-        [0:v][vhead]xfade=transition=fade:duration=${xfade}:offset=${xfade_offset}[vxf];
+        [vbody][vhead]xfade=transition=fade:duration=${xfade}:offset=${xfade_offset}[vxf];
         [vxf]trim=start=0:end=${out_dur},setpts=PTS-STARTPTS[vout]
       " \
       -map "[vout]" \
