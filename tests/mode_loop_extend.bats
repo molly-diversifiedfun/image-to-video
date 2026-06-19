@@ -423,3 +423,25 @@ teardown() {
   [ "$status" -ne 0 ]
   echo "$output" | grep -qiE "crf"
 }
+
+# ---------------------------------------------------------------------------
+# Test 17 — short clip + oversized --xfade clamps instead of erroring.
+#
+# A 3s clip can't support a 5s dissolve (needs >= 15s).  Rather than failing,
+# loop-extend must clamp the window to the largest that fits (3/3 = 1.0s),
+# print a "note:" explaining it, and still produce a valid output.  TEETH: the
+# previous behavior errored out (non-zero exit).
+# ---------------------------------------------------------------------------
+
+@test "loop-extend: oversized --xfade on a short clip clamps + notes, does not error" {
+  local clip="$WORK_DIR/src.mp4"
+  local out="$WORK_DIR/clamped.mp4"
+  mk_clip "$clip" 220 3   # 3s clip
+
+  run "$REPO_ROOT/make-video" "$clip" 0.005 --yes --xfade 5 --out "$out"
+  [ "$status" -eq 0 ]
+  [ -f "$out" ]
+  assert_has_stream "$out" v
+  # Must explain the clamp (mentions "note" and the too-short dissolve)
+  echo "$output" | grep -qiE "note:.*(short|dissolve|fits)"
+}

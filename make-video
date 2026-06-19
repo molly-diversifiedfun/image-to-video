@@ -420,6 +420,28 @@ loop_extend_mode() {
     [[ -e "$AUDIO_PATH" ]] || die "--audio path not found: $AUDIO_PATH"
   fi
 
+  # Short-clip handling for crossfade: the dissolve needs the clip to be at
+  # least 3× the xfade window.  Rather than erroring out on a short clip, clamp
+  # the window down to the largest dissolve that fits and tell the operator how
+  # long a clip the requested window would need.  (pingpong/native don't use
+  # xfade, so this only applies to crossfade.)
+  if [[ "$LOOP_STRATEGY" == "crossfade" ]]; then
+    local clip_dur
+    if clip_dur="$(_loop_get_duration "$clip")"; then
+      local fits
+      fits="$(awk -v d="$clip_dur" -v x="$LOOP_XFADE" 'BEGIN{print (x <= d/3) ? 1 : 0}')"
+      if [[ "$fits" -eq 0 ]]; then
+        # Floor to 2 decimals so 3×max_xf stays <= clip_dur (no rounding-up).
+        local max_xf need_secs
+        max_xf="$(awk -v d="$clip_dur" 'BEGIN{printf "%.2f", int(d/3*100)/100}')"
+        need_secs="$(awk -v x="$LOOP_XFADE" 'BEGIN{printf "%.1f", 3*x}')"
+        printf 'note: clip is %.1fs — too short for a %ss dissolve (needs a clip of at least %ss). Using the largest dissolve that fits: %ss.\n' \
+          "$clip_dur" "$LOOP_XFADE" "$need_secs" "$max_xf" >&2
+        LOOP_XFADE="$max_xf"
+      fi
+    fi
+  fi
+
   local tmp_dir
   tmp_dir="$(mktemp -d)"
   # Named sentinel file so the cleanup assertion in the test can detect leaks.
