@@ -8,11 +8,13 @@
 #             internal turn and the wrap boundary (PSNR within 8 dB of baseline).
 #             Duration ≈ 2× CLIP.
 #
-#   crossfade: OUT has its tail dissolved into its head via ffmpeg xfade +
-#              acrossfade, so concat-copies have no hard-cut FLASH.
-#              NOTE: a content jump still occurs for directional motion — do
-#              NOT assert seamlessness for this strategy.  Assert only that
-#              crossfade boundary PSNR > hard-cut boundary PSNR.
+#   crossfade: OUT is built so its first and last frames are the SAME source
+#              frame (CLIP@xfade); the real tail dissolves into the real head
+#              ACROSS the seam.  concat-copies have no hard-cut FLASH and no
+#              backward content jump.  The seam is a blend (not pixel-identical
+#              like pingpong), so on sharp/high-motion content a faint residual
+#              may remain — widen xfade to hide it.  The right strategy when the
+#              source can't be reversed (rain, falling motion).
 #              CLIP must be >= 3× xfade; shorter clips are rejected (non-zero).
 #
 #   native: OUT = CLIP as-is (copy).  Caller asserts the source already loops.
@@ -21,7 +23,7 @@
 # Seam honesty (empirically measured on smooth gradient content):
 #   baseline adjacent-frame PSNR ≈ 48 dB  (mk_clip gradients source)
 #   pingpong boundary PSNR ≈ 48–56 dB     — TRULY seamless, passes assert_seam_ok
-#   crossfade boundary PSNR ≈ 28–32 dB    — ~18 dB drop, does NOT pass assert_seam_ok
+#   crossfade boundary PSNR ≈ 40–50 dB    — seam-spanning, ≈1 dB drop → SEAMLESS
 #   hard-cut boundary PSNR ≈ 10–20 dB     — large drop, clearly worse than crossfade
 #
 # Audio: all strategies preserve / reverse audio through the chosen treatment.
@@ -197,14 +199,16 @@ _boundary_psnr() {
 #       the same logical position
 #
 # Assert: crossfade boundary PSNR is strictly higher than hard-cut PSNR.
-# Do NOT assert assert_seam_ok for crossfade — it does not pass.
+# (With the seam-spanning fix the crossfade seam is also continuous — see the
+# seam_check SEAMLESS test — but here we only assert it beats a hard cut, which
+# is the strategy-independent floor.)
 #
 # Typical measured values (smooth gradient source, 4s clip, 1s xfade):
-#   hard-cut PSNR ≈ 12–18 dB
-#   crossfade PSNR ≈ 26–32 dB
+#   hard-cut PSNR  ≈ 12–18 dB
+#   crossfade PSNR ≈ 40–50 dB (seam joins content-X to content-X)
 # ---------------------------------------------------------------------------
 
-@test "crossfade: boundary PSNR is higher than a hard cut (improves on hard cut, but not seamless)" {
+@test "crossfade: boundary PSNR is higher than a hard cut" {
   local clip="$WORK_DIR/clip.mp4"
   local unit_xf="$WORK_DIR/unit_xf.mp4"
   local tiled_xf="$WORK_DIR/tiled_xf.mp4"
