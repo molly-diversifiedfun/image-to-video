@@ -4,6 +4,8 @@
 
 > **Red-team correction (2026-06-18):** "seamless" is not free on arbitrary footage. Measured boundary PSNR (baseline ≈48 dB): a **crossfade** loop leaves a visible content jump (**28.6 dB**) — it hides the *flash*, not the content reset; **pingpong** is truly seamless (**48–56 dB**) but reverses motion. See architecture §3.2. This PRD now specifies `--loop` strategies and a preview gate instead of promising blanket invisibility.
 
+> **Fix supersedes the above (2026-06-19):** the 28.6 dB content jump was an implementation bug, not an inherent crossfade limit. `_loop_crossfade` dissolved the body into the head but then **restarted the unit at content 0**, leaving an `xfade`-length backward jump at the seam. Building the unit to start at content `xfade` (so its first and last frames are the same source frame) makes the dissolve straddle the seam — continuous, no jump. Crossfade now measures **SEAMLESS (~1 dB drop)** on the gradient fixture and on rain-like footage. **pingpong is no longer the only seamless option; crossfade is the seamless choice when the source can't be reversed (rain, falling/directional motion).** UC-3's "crossfade jump" no longer occurs — forward-moving footage now loops with no reversal AND no jump. Widen `--xfade` (e.g. 5s) for a softer handoff; clip must still be ≥ 3× the window.
+
 ## 1. Problem
 
 A short ambient clip (with natural sound) must be extended to many hours by looping — but the loop point should be as undetectable as the footage allows, in both video and audio. A hard loop "pops." The honest constraint: truly invisible looping requires either symmetric/loop-ready footage or motion-reversing pingpong; a plain crossfade only suppresses the flash.

@@ -46,11 +46,11 @@ A red-team measured boundary PSNR (higher = less visible) on smooth ambient-like
 
 | `--loop` strategy | boundary | reverses motion? | use for |
 |---|---|---|---|
-| `crossfade` (default) | **28.6 dB** — visible content jump | no | abstract/textural footage where a content reset reads as "fine" |
-| `pingpong` | **48–56 dB** — provably seamless | **yes** | symmetric ambient (water, fire, fog, clouds); the only truly invisible option for arbitrary footage |
+| `crossfade` (default) | **~1 dB drop — SEAMLESS** (seam-spanning dissolve; was 28.6 dB before the 2026-06-19 fix) | no | the seamless choice for footage that **can't be reversed** — rain, snow, traffic, forward-moving drone, any directional motion |
+| `pingpong` | **48–56 dB — provably seamless** | **yes** | symmetric ambient (water, fire, fog, clouds) where motion reversal is invisible |
 | `native` | seamless IF source loops | no | footage shot/edited to loop (end frame ≈ start frame) |
 
-**Consequence for the PRDs:** "seamless" is NOT free on arbitrary footage. Crossfade hides a hard cut's *flash* but leaves a ~`xfade`-length content jump — fine for water/fog, visibly wrong for a forward-moving drone shot. True invisibility requires `pingpong` (accepting motion reversal) or loop-native source. The tool must (a) expose `--loop`, (b) default to `crossfade` but recommend `pingpong` for motion, (c) state the source-footage requirement, and (d) run `seam-check` + a preview so the operator sees the seam before committing to a multi-hour render.
+**Consequence for the PRDs (updated 2026-06-19):** the original 28.6 dB "content jump" was an implementation bug — `_loop_crossfade` dissolved the body into the head but then restarted the unit at content 0, leaving an `xfade`-length backward jump at the seam. Building the unit to start at content `xfade` (first and last frames = the same source frame) makes the dissolve **straddle the seam**: continuous, no flash, no jump. So crossfade is now genuinely seamless on arbitrary footage, **without** reversing motion — it is the right default and the correct choice when the source can't be reversed. `pingpong` remains for symmetric footage where its higher PSNR is wanted and reversal is invisible. The tool still (a) exposes `--loop`, (b) defaults to `crossfade`, (c) states the ≥ 3× `xfade` source-length requirement, and (d) runs `seam-check` + a preview before a multi-hour render. The "recommend pingpong when not seamless" tip still fires for the rare sharp-motion clip whose crossfade seam reads as SOFT/VISIBLE.
 
 ## 4. Canonical pipeline (every mode follows this SOP shape)
 
@@ -78,7 +78,7 @@ Each PRD's "SOP" section instantiates these steps for that mode. The PREVIEW gat
 - **Output**: H.264 MP4, 30 fps, 4K-native (downscale flag available), `yuv420p`, `+faststart`.
 - **Audio**: AAC, stereo, normalized to a consistent loudness target; absent → silent (back-compatible).
 - **Crossfade defaults**: video dissolve 1.5s (loops/clips), 2.5s (slideshow images); audio crossfade matched. All overridable via `--xfade SECONDS`.
-- **Loop strategy** (`--loop`): `crossfade` (default) | `pingpong` (truly seamless, reverses motion) | `native` (loop-ready source). See §3.2.
+- **Loop strategy** (`--loop`): `crossfade` (default; seam-spanning dissolve — seamless without reversing motion, for sources that can't be reversed like rain) | `pingpong` (truly seamless, reverses motion — for symmetric ambient) | `native` (loop-ready source). See §3.2.
 - **Parallelism**: auto by mode (copy-bound modes high; re-encode modes low, GPU shared). `--jobs` overrides.
 - **Hygiene**: skip non-media and macOS `._` files; spaces in paths safe; bundled ffmpeg on Apple Silicon.
 - **Determinism**: `--seed N` makes shuffle reproducible (mix mode).
