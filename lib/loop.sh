@@ -323,7 +323,7 @@ _loop_crossfade() {
         [vxf]trim=start=0:end=${out_dur},setpts=PTS-STARTPTS[vout];
         [0:a]atrim=start=${xfade},asetpts=PTS-STARTPTS[abody];
         [1:a]atrim=start=0:end=${xfade},asetpts=PTS-STARTPTS[ahead];
-        [abody][ahead]acrossfade=d=${xfade}:c1=tri:c2=tri[axf];
+        [abody][ahead]acrossfade=d=${xfade}:c1=qsin:c2=qsin[axf];
         [axf]atrim=start=0:end=${out_dur},asetpts=PTS-STARTPTS[aout]
       " \
       -map "[vout]" \
