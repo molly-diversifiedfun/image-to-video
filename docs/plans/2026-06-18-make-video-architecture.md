@@ -31,6 +31,7 @@ folder of video clips            → mix           PRD-4
 | `clip-sequencer` | order a clip set (shuffle, no adjacent repeat, reshuffle each pass) and trim the last junction to hit the exact target length | mix |
 | `audio-build` | assemble an audio track to the target length — single file → seamless loop; folder → crossfaded playlist, loudness-normalized — then mux | all modes with `--audio` |
 | `seam-check` | measure boundary PSNR vs the clip's baseline adjacent-frame PSNR; warn if a seam drops sharply (auto-QC for a non-technical operator) | loop-extend, slideshow, mix |
+| `apply-fades` (`lib/fade.sh`) | top-and-tail the finished file with a fade up from black / down to black (video + audio) over `--fade S`; re-encodes ONLY the head/tail on keyframe boundaries and stream-copies the middle, so a multi-hour file stays fast | loop-extend, still, slideshow, mix (added 2026-06-19) |
 
 ### 3.1 The seam-cost insight (why some modes are fast and one is slow)
 
@@ -38,7 +39,7 @@ A crossfade is a *re-encode* of the overlap region. The cost of a mode is the nu
 
 - **loop-extend**: the clip loops against *itself*, so there is exactly ONE unique seam. Encode that loop unit once, then byte-copy it N times. Fast.
 - **slideshow**: N images → N−1 unique seams, each a ~2–3s dissolve. Few, short. Fast.
-- **mix**: every adjacent pair of *different* clips is a unique seam, and the whole timeline is one continuous `xfade` chain → full re-encode. Slow (GPU-accelerated, ~1–2h for a multi-hour file). This is inherent, not a defect.
+- **mix**: every adjacent pair of *different* clips is a unique seam, and the whole timeline is one continuous `xfade` chain → full re-encode. Slow by nature; CPU `libx264` by default, or pass `--gpu` for Apple-Silicon VideoToolbox (much faster on an M-series Mac, added 2026-06-19). This cost is inherent to the mode, not a defect.
 
 ### 3.2 Seam strategy — what "seamless" actually means (tested 2026-06-18)
 
@@ -75,13 +76,17 @@ Each PRD's "SOP" section instantiates these steps for that mode. The PREVIEW gat
 
 ## 5. Cross-cutting requirements
 
-- **Output**: H.264 MP4, 30 fps, 4K-native (downscale flag available), `yuv420p`, `+faststart`.
+- **Output**: H.264 MP4, 30 fps, native resolution by default, `yuv420p`, `+faststart`.
 - **Audio**: AAC, stereo, normalized to a consistent loudness target; absent → silent (back-compatible).
-- **Crossfade defaults**: video dissolve 1.5s (loops/clips), 2.5s (slideshow images); audio crossfade matched. All overridable via `--xfade SECONDS`.
+- **Crossfade defaults**: video dissolve 1.5s (loops/clips), 2.5s (slideshow images); audio crossfade matched. All overridable via `--xfade SECONDS`. An oversized `--xfade` on a short clip is **clamped** to the largest dissolve that fits (with a note), not an error (added 2026-06-19).
 - **Loop strategy** (`--loop`): `crossfade` (default; seam-spanning dissolve — seamless without reversing motion, for sources that can't be reversed like rain) | `pingpong` (truly seamless, reverses motion — for symmetric ambient) | `native` (loop-ready source). See §3.2.
-- **Parallelism**: auto by mode (copy-bound modes high; re-encode modes low, GPU shared). `--jobs` overrides.
+- **Quality / size knobs** (added 2026-06-19): `--crf N` (encode quality, all modes; loop-extend keeps its own default 23 unless overridden) and `--height N` (downscale to N px tall — the biggest lever on a multi-hour file's size). Propagated to batch/manifest child processes via the environment.
+- **Top-and-tail fade** (`--fade S`, added 2026-06-19): fade up from black / down to black, video + audio, applied to the finished file by `apply-fades`. See the engine table.
+- **Output path**: `--out` accepts a directory **or** an exact file (e.g. `--out rain-8h.mp4`, parent auto-created) in every mode (unified 2026-06-19).
+- **Encoder / parallelism**: copy-bound modes need no encode; the re-encode mode (mix) runs CPU `libx264` by default and **Apple-Silicon VideoToolbox (`h264_videotoolbox`) with `--gpu`** (added 2026-06-19). `--zoom` already uses VideoToolbox. `--jobs` overrides batch concurrency.
 - **Hygiene**: skip non-media and macOS `._` files; spaces in paths safe; bundled ffmpeg on Apple Silicon.
 - **Determinism**: `--seed N` makes shuffle reproducible (mix mode).
+- **Render-time readout**: loop-extend and mix print actual `rendered in Ns`; mix also prints an up-front size/time estimate and which encoder it will use.
 
 ## 6. Risks
 

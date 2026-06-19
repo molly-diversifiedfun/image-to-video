@@ -17,4 +17,17 @@ Status: design approved 2026-06-18, then **red-teamed** (pre-mortem) the same da
 2. A non-technical operator can't spot a subtly-broken multi-hour output — added a `seam-check` auto-QC + a PREVIEW go/no-go gate to the SOP (architecture §4).
 3. The slow/fragile mixer (PRD-4) is gated to ship last, behind the four fast modes (architecture §7).
 
-**Status: all 5 PRDs implemented (2026-06-18).** PRD-1/2/3/5 are the fast modes; PRD-4 (`mix`) shipped last per the architecture's gating, fully re-encoding behind the estimate + preview + go/no-go gate. Test suite: 130 bats tests across the five modes.
+**Status: all 5 PRDs implemented (2026-06-18).** PRD-1/2/3/5 are the fast modes; PRD-4 (`mix`) shipped last per the architecture's gating, fully re-encoding behind the estimate + preview + go/no-go gate.
+
+## Post-PRD enhancements (2026-06-19)
+
+Driven by real use building long rain/ambient loops. These are flag-level additions on top of the five modes — not new modes — so they're tracked here and in the [architecture doc](../plans/2026-06-18-make-video-architecture.md) (§5 knobs + engine table) rather than as standalone PRDs:
+
+- **Crossfade-loop seam fix** — `--loop crossfade` is now genuinely seamless (the dissolve straddles the seam, no backward content jump); pingpong is no longer the only seamless option. See architecture §3.2.
+- **`--fade S`** — top-and-tail fade up-from / down-to black (video + audio); re-encodes only the head/tail on keyframe boundaries, copies the middle.
+- **`--crf N` / `--height N`** — encode-quality and output-size control (the size lever for multi-hour files).
+- **`--out FILE`** — exact output filename in every mode (loop-extend previously took only a positional dir).
+- **`--gpu`** — Apple-Silicon VideoToolbox encoding for `mix`; plus actual `rendered in Ns` readouts.
+- **`--xfade` clamp** — an oversized dissolve on a short clip clamps to the largest that fits instead of erroring.
+
+Test suite: **142 bats tests** (130 across the five modes + 12 for the enhancements, incl. `tests/fade.bats`).
