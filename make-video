@@ -263,32 +263,6 @@ out_path() {  # image, outdir -> outdir/name.mp4
   printf '%s/%s.mp4' "${outdir:-$(dirname "$img")}" "$name"
 }
 
-# _smooth_reencode OUT — re-encode the finished loop in ONE continuous pass so
-# there is no per-loop seam.  A concat-copied loop puts a fresh keyframe at every
-# loop point (a one-frame video "pulse") and a fresh AAC frame boundary (a faint
-# audio blip); a continuous encode removes both — the same thing Premiere does.
-# CPU libx264 only: the loop point is a near-match, so libx264 does NOT keyframe
-# there, whereas the GPU (VideoToolbox) does and the pulse survives.  No-op
-# unless --smooth.  This re-encodes the WHOLE file, so it scales with length.
-_smooth_reencode() {
-  local out="$1"
-  [[ "${SMOOTH:-0}" -eq 1 ]] || return 0
-  local crf="${LOOP_CRF:-23}"
-  local tmp; tmp="$(dirname "$out")/.smooth.$$.$(basename "$out")"
-  printf 'note: --smooth — re-encoding the whole loop continuously for a flawless seam (this is the slow step)…\n' >&2
-  if _loop_has_audio "$out"; then
-    "$FFMPEG" -nostdin -loglevel error -y -i "$out" \
-      -c:v libx264 -preset veryfast -crf "$crf" -pix_fmt yuv420p \
-      -c:a aac -b:a 192k -movflags +faststart "$tmp" \
-      && mv -f "$tmp" "$out" || { rm -f "$tmp"; echo "note: --smooth re-encode failed; keeping the fast (concat) loop" >&2; return 1; }
-  else
-    "$FFMPEG" -nostdin -loglevel error -y -i "$out" \
-      -c:v libx264 -preset veryfast -crf "$crf" -an -pix_fmt yuv420p \
-      -movflags +faststart "$tmp" \
-      && mv -f "$tmp" "$out" || { rm -f "$tmp"; echo "note: --smooth re-encode failed; keeping the fast (concat) loop" >&2; return 1; }
-  fi
-}
-
 # _finalize_fades OUT — if --fade was requested, top-and-tail the finished file
 # with a fade up from black / down to black (video + audio), in place.  No-op
 # when FADE is 0.  Re-encodes only the head/tail (see lib/fade.sh).
@@ -647,8 +621,23 @@ loop_extend_mode() {
 
     printf '[loop-extend] preview gate\n'
     printf '  %s\n' "$seam_output"
-    printf '  estimated output: %s s, ~%s MB\n' "$target_secs" "$est_mb"
+
+    # Disk-space guard.  A multi-hour loop can be tens of GB; --smooth re-encodes
+    # roughly 2.5× smaller than the fast concat-copy.  Estimate the real footprint
+    # and REFUSE to start if it won't fit — far better than filling the disk
+    # mid-render (which leaves a giant broken file behind).
+    local need_mb free_mb
+    need_mb="$(awk -v e="$est_mb" -v s="$SMOOTH" 'BEGIN{ printf "%.0f", (s==1)? e/2.5 : e }')"
+    free_mb="$(df -k "$(dirname "$out")" 2>/dev/null | awk 'NR==2{printf "%.0f", $4/1024}')"
+    printf '  estimated output: %s s, ~%s MB%s   (free disk: ~%s MB)\n' \
+      "$target_secs" "$need_mb" "$( [[ "$SMOOTH" -eq 1 ]] && echo ' [smooth]' )" "${free_mb:-?}"
     printf '  seam preview clip: %s\n' "$preview_file"
+
+    if [[ -n "$free_mb" ]] && awk -v n="$need_mb" -v f="$free_mb" 'BEGIN{ exit !(n > f*0.95) }'; then
+      printf '  ✗ not enough free disk: ~%s MB needed, ~%s MB free.\n' "$need_mb" "$free_mb" >&2
+      printf '    Free up space, or shrink the file with --height (e.g. --height 1080) or a higher --crf (e.g. --crf 26).\n' >&2
+      _cleanup_loop_tmp; return 1
+    fi
 
     # Only suggest pingpong when not already using it (avoid confusing tip-on-pingpong),
     # and not under --smooth (the continuous re-encode already removes the seam).
@@ -702,20 +691,35 @@ loop_extend_mode() {
   ua_count="${ua_count:-0}"
   [[ "$ua_count" -ge 1 ]] && unit_has_audio=1
 
+  # --smooth: encode the tiled loop in ONE continuous pass straight from the
+  # concat list (libx264 video + AAC audio) — no per-loop keyframe pulse / audio
+  # boundary, AND no giant concat-copy intermediate on disk (critical at 8h: the
+  # ultrafast unit bitrate would otherwise materialise a ~10× larger temp file).
+  # Default stays a fast stream copy.
+  local -a _venc _aenc
+  if [[ "$SMOOTH" -eq 1 ]]; then
+    _venc=(-c:v libx264 -preset veryfast -crf "${LOOP_CRF:-23}" -pix_fmt yuv420p)
+    _aenc=(-c:a aac -b:a 192k)
+    printf 'note: --smooth — encoding the whole loop continuously for a flawless seam (this is the slow step)…\n' >&2
+  else
+    _venc=(-c:v copy)
+    _aenc=(-c:a copy)
+  fi
+
   if [[ -z "$AUDIO_PATH" ]]; then
     # No external audio: tile + trim to produce the final output directly.
     if [[ "$unit_has_audio" -eq 1 ]]; then
       "$FFMPEG" -nostdin -loglevel error -y \
         -f concat -safe 0 -i "$list_file" \
         -t "$target_secs" \
-        -c copy \
+        "${_venc[@]}" "${_aenc[@]}" \
         -movflags +faststart \
         "$out" || { _cleanup_loop_tmp; return 1; }
     else
       "$FFMPEG" -nostdin -loglevel error -y \
         -f concat -safe 0 -i "$list_file" \
         -t "$target_secs" \
-        -c:v copy -an \
+        "${_venc[@]}" -an \
         -movflags +faststart \
         "$out" || { _cleanup_loop_tmp; return 1; }
     fi
@@ -736,11 +740,12 @@ loop_extend_mode() {
     local tmp_audio="$tmp_dir/audio.aac"
 
     if [[ "$audio_mode" == "layer" ]]; then
-      # Tile WITH native audio preserved (-c copy, no -an).
+      # Tile WITH native audio preserved (re-encode video under --smooth so the
+      # mux copies an already-seamless, normal-size video — no giant temp).
       "$FFMPEG" -nostdin -loglevel error -y \
         -f concat -safe 0 -i "$list_file" \
         -t "$target_secs" \
-        -c copy \
+        "${_venc[@]}" -c:a copy \
         -movflags +faststart \
         "$tiled_file" || { _cleanup_loop_tmp; return 1; }
 
@@ -754,7 +759,7 @@ loop_extend_mode() {
       "$FFMPEG" -nostdin -loglevel error -y \
         -f concat -safe 0 -i "$list_file" \
         -t "$target_secs" \
-        -c:v copy -an \
+        "${_venc[@]}" -an \
         -movflags +faststart \
         "$tiled_file" || { _cleanup_loop_tmp; return 1; }
 
@@ -768,8 +773,8 @@ loop_extend_mode() {
 
   _cleanup_loop_tmp
 
-  # --smooth: continuous re-encode → no per-loop video pulse or audio boundary.
-  _smooth_reencode "$out" || true
+  # (--smooth is applied inline during tiling above — one continuous pass, no
+  #  giant concat-copy intermediate.)
   # Top-and-tail fade (video + audio), in place, if --fade was given.
   _finalize_fades "$out" || true
 
