@@ -626,8 +626,12 @@ loop_extend_mode() {
     # roughly 2.5× smaller than the fast concat-copy.  Estimate the real footprint
     # and REFUSE to start if it won't fit — far better than filling the disk
     # mid-render (which leaves a giant broken file behind).
+    # Peak footprint: --smooth re-encodes ~2.5× smaller; --fade then briefly holds
+    # a second copy of the file (it copies the middle into a faded temp), so the
+    # peak is ~2× the output while it finishes.
     local need_mb free_mb
-    need_mb="$(awk -v e="$est_mb" -v s="$SMOOTH" 'BEGIN{ printf "%.0f", (s==1)? e/2.5 : e }')"
+    need_mb="$(awk -v e="$est_mb" -v s="$SMOOTH" -v f="$FADE" \
+      'BEGIN{ b=(s==1)? e/2.5 : e; if (f+0>0) b*=2; printf "%.0f", b }')"
     free_mb="$(df -k "$(dirname "$out")" 2>/dev/null | awk 'NR==2{printf "%.0f", $4/1024}')"
     printf '  estimated output: %s s, ~%s MB%s   (free disk: ~%s MB)\n' \
       "$target_secs" "$need_mb" "$( [[ "$SMOOTH" -eq 1 ]] && echo ' [smooth]' )" "${free_mb:-?}"
