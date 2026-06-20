@@ -123,6 +123,8 @@ source "$SCRIPT_DIR/lib/sequencer.sh"
 source "$SCRIPT_DIR/lib/mixer.sh"
 # shellcheck source=lib/fade.sh
 source "$SCRIPT_DIR/lib/fade.sh"
+# shellcheck source=lib/xfade_auto.sh
+source "$SCRIPT_DIR/lib/xfade_auto.sh"
 
 preflight() {
   [[ -n "$FFMPEG" && -n "$FFPROBE" ]] && return 0
@@ -297,6 +299,7 @@ OUT_FILE=""                 # explicit output FILE (set when --out names a *.mp4
 MIX_GPU=0                   # 1 = encode mix on Apple Silicon VideoToolbox (--gpu)
 FADE="${FADE:-0}"           # fade-in/out seconds at the file's start AND end (--fade);
                             # env-aware so it reaches batch/manifest child processes
+DETECT_XFADE=0             # 1 = just report the auto-detected audio crossfade and exit (--detect-xfade)
 POS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -340,6 +343,7 @@ while [[ $# -gt 0 ]]; do
     --hardcut)     MIX_HARDCUT=1;     shift;;
     --gpu)         MIX_GPU=1;         shift;;
     --fade)        FADE="$2";         shift 2;;
+    --detect-xfade) DETECT_XFADE=1;   shift;;
     -h|--help)  sed -n '2,62p' "$0"; exit 0;;
     -*)         die "unknown flag: $1";;
     *)          POS+=("$1");          shift;;
@@ -817,6 +821,17 @@ case "$MODE" in
   # avoiding exported-function fragility. xargs -I{} uses newline as the only
   # delimiter, so spaces in paths (e.g. "/Volumes/1TB SSD/...") are safe.
   single)
+    # --detect-xfade: report the auto-detected audio crossfade for a clip and exit.
+    # (No HOURS needed — it's a read-only analysis of the clip's ambience.)
+    if [[ "$DETECT_XFADE" -eq 1 ]]; then
+      [[ ${#POS[@]} -ge 1 ]] || die "usage: $0 CLIP --detect-xfade"
+      [[ "$(classify_input "${POS[0]}" 2>/dev/null)" == "video" ]] \
+        || die "--detect-xfade needs a video clip: ${POS[0]}"
+      printf 'recommended audio crossfade for %s: %ss\n' \
+        "$(basename "${POS[0]}")" "$(XFADE_AUTO_VERBOSE=1 detect_audio_xfade "${POS[0]}")"
+      exit 0
+    fi
+
     [[ ${#POS[@]} -ge 2 ]] || die "usage: $0 FILE HOURS [OUTDIR | --out FILE]"
 
     # Resolve the output path.  Precedence: explicit --out FILE (e.g.
