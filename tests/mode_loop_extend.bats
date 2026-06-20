@@ -445,3 +445,59 @@ teardown() {
   # Must explain the clamp (mentions "note" and the too-short dissolve)
   echo "$output" | grep -qiE "note:.*(short|dissolve|fits)"
 }
+
+# Per-window max frame-to-frame difference in a 0.5s window at time T (a flicker
+# at the loop seam shows up as a spike here).
+_seam_peak() {
+  "$FFMPEG" -nostdin -loglevel error -ss "$2" -i "$1" -t 0.5 \
+    -vf "tblend=all_mode=difference,signalstats,metadata=print:file=$WORK_DIR/sp.txt" -an -f null - 2>/dev/null
+  awk '/YAVG=/{y=$0;sub(/.*YAVG=/,"",y);if(y>m)m=y}END{printf "%.3f",m}' "$WORK_DIR/sp.txt"
+}
+
+# ---------------------------------------------------------------------------
+# Test 18 — --smooth reduces the loop seam (continuous re-encode removes the
+# per-loop keyframe pulse).  TEETH: the smooth seam peak must be lower than the
+# default concat-copy seam peak at the same boundary.  Silent source + xfade 3
+# so the auto-detect floor (min 3s) does NOT shift the unit length.
+# ---------------------------------------------------------------------------
+@test "loop-extend --smooth: loop seam is smaller than the default concat-copy" {
+  local clip="$WORK_DIR/m.mp4"
+  # 12s with real motion, NO audio (so the auto-detect floor = min 3s = our xfade).
+  "$FFMPEG" -nostdin -loglevel error -y -f lavfi -i "testsrc=s=320x180:r=30:d=12" \
+    -c:v libx264 -preset veryfast -crf 20 -an -r 30 "$clip"
+
+  run "$REPO_ROOT/make-video" "$clip" 0.0083 --xfade 3 --yes --out "$WORK_DIR/plain.mp4"
+  [ "$status" -eq 0 ]
+  run "$REPO_ROOT/make-video" "$clip" 0.0083 --xfade 3 --smooth --yes --out "$WORK_DIR/smooth.mp4"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qi "smooth"   # success line marks it
+
+  # Unit length = 12 - 3 = 9s → first seam at ~9s. Measure the boundary peak.
+  local p s
+  p="$(_seam_peak "$WORK_DIR/plain.mp4" 8.75)"
+  s="$(_seam_peak "$WORK_DIR/smooth.mp4" 8.75)"
+  echo "default seam peak=$p  smooth seam peak=$s"
+  awk -v a="$s" -v b="$p" 'BEGIN{ exit !(a < b) }'
+}
+
+# ---------------------------------------------------------------------------
+# Test 19 — --smooth auto-raises the dissolve when the clip's ambience drifts.
+# A clip whose sound morphs (rumble→hiss) makes the detector ask for a longer
+# audio crossfade; --smooth must raise the dissolve above the user's small value
+# and say so.
+# ---------------------------------------------------------------------------
+@test "loop-extend --smooth: auto-raises the dissolve for drifting ambience" {
+  local clip="$WORK_DIR/drift.mp4"
+  "$FFMPEG" -nostdin -loglevel error -y -f lavfi -i "anoisesrc=d=15:c=pink:a=0.5,lowpass=f=250" "$WORK_DIR/r.wav"
+  "$FFMPEG" -nostdin -loglevel error -y -f lavfi -i "anoisesrc=d=15:c=white:a=0.4,highpass=f=4000" "$WORK_DIR/h.wav"
+  printf "file '%s/r.wav'\nfile '%s/h.wav'\n" "$WORK_DIR" "$WORK_DIR" > "$WORK_DIR/c.txt"
+  "$FFMPEG" -nostdin -loglevel error -y -f concat -safe 0 -i "$WORK_DIR/c.txt" \
+    -f lavfi -i "testsrc=s=320x180:r=30:d=30" -map 1:v -map 0:a -shortest \
+    -c:v libx264 -preset veryfast -crf 20 -c:a aac -r 30 "$clip"
+
+  run "$REPO_ROOT/make-video" "$clip" 0.0083 --xfade 2 --smooth --yes --out "$WORK_DIR/o.mp4"
+  [ "$status" -eq 0 ]
+  [ -f "$WORK_DIR/o.mp4" ]
+  # Must note that --smooth raised the dissolve above the requested 2s.
+  echo "$output" | grep -qiE "smooth raised the dissolve"
+}

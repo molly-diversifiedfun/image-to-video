@@ -12,7 +12,7 @@
 # SRC < TARGET_SECS:
 #   Build a seamless-loop unit:
 #     body  = SRC trimmed to (SRC_DUR - SEAM)
-#     seam  = last SEAM seconds of SRC crossfaded (acrossfade, tri window) with
+#     seam  = last SEAM seconds of SRC crossfaded (acrossfade, equal-power qsin) with
 #             first SEAM seconds of SRC — this removes the amplitude
 #             discontinuity at the wrap boundary
 #     unit  = body + seam  (≈ SRC_DUR seconds, loopable)
@@ -223,10 +223,10 @@ _audio_build_playlist() {
 
     # Build filter_complex string step by step
     if [[ "$num_files" -eq 2 ]]; then
-      fc="[0:a][1:a]acrossfade=d=${xfade_d}:c1=tri:c2=tri[out]"
+      fc="[0:a][1:a]acrossfade=d=${xfade_d}:c1=qsin:c2=qsin[out]"
     else
       # Chain: first pair produces [cf0], then each subsequent input is faded in
-      fc="[0:a][1:a]acrossfade=d=${xfade_d}:c1=tri:c2=tri[cf0];"
+      fc="[0:a][1:a]acrossfade=d=${xfade_d}:c1=qsin:c2=qsin[cf0];"
       for (( i=2; i<num_files; i++ )); do
         local prev_label="cf$(( i - 2 ))"
         local this_label
@@ -235,7 +235,7 @@ _audio_build_playlist() {
         else
           this_label="cf$(( i - 1 ))"
         fi
-        fc="${fc}[${prev_label}][${i}:a]acrossfade=d=${xfade_d}:c1=tri:c2=tri[${this_label}];"
+        fc="${fc}[${prev_label}][${i}:a]acrossfade=d=${xfade_d}:c1=qsin:c2=qsin[${this_label}];"
       done
       # Remove trailing semicolon
       fc="${fc%;}"
@@ -311,7 +311,7 @@ _audio_build_playlist() {
     -filter_complex "
       [0:a]atrim=start=${tail_start},asetpts=PTS-STARTPTS[tail];
       [1:a]atrim=end=${seam},asetpts=PTS-STARTPTS[head];
-      [tail][head]acrossfade=d=${seam}:c1=tri:c2=tri[seampart];
+      [tail][head]acrossfade=d=${seam}:c1=qsin:c2=qsin[seampart];
       [0:a]atrim=end=${tail_start},asetpts=PTS-STARTPTS[body];
       [body][seampart]concat=n=2:v=0:a=1[unit]
     " \
@@ -483,7 +483,7 @@ audio_build() {
       -filter_complex "
         [0:a]atrim=start=${tail_start},asetpts=PTS-STARTPTS[tail];
         [1:a]atrim=end=${seam},asetpts=PTS-STARTPTS[head];
-        [tail][head]acrossfade=d=${seam}:c1=tri:c2=tri[seampart];
+        [tail][head]acrossfade=d=${seam}:c1=qsin:c2=qsin[seampart];
         [0:a]atrim=end=${tail_start},asetpts=PTS-STARTPTS[body];
         [body][seampart]concat=n=2:v=0:a=1[unit]
       " \

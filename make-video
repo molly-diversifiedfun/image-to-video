@@ -43,6 +43,12 @@
 #   go/no-go before the full render. --hardcut skips crossfades (fast fallback).
 #
 # Output, quality & polish (all modes unless noted):
+#     --smooth       (loop-extend) make the loop point PERFECTLY seamless in
+#                    picture AND sound: auto-tunes the audio dissolve to the clip
+#                    and re-encodes the whole loop continuously (no per-loop blink
+#                    or blip). Slower — scales with length — but the best result.
+#     --detect-xfade (loop-extend) just print the audio-dissolve length the tool
+#                    would auto-pick for a clip, then exit.  No render.
 #     --out FILE     write exactly to FILE (e.g. --out rain-8h.mp4). Works in
 #                    every mode now; a bare directory still works too.
 #     --crf N        encode quality, 0–51 (lower = better/larger). Loop-extend
@@ -123,6 +129,8 @@ source "$SCRIPT_DIR/lib/sequencer.sh"
 source "$SCRIPT_DIR/lib/mixer.sh"
 # shellcheck source=lib/fade.sh
 source "$SCRIPT_DIR/lib/fade.sh"
+# shellcheck source=lib/xfade_auto.sh
+source "$SCRIPT_DIR/lib/xfade_auto.sh"
 
 preflight() {
   [[ -n "$FFMPEG" && -n "$FFPROBE" ]] && return 0
@@ -255,6 +263,32 @@ out_path() {  # image, outdir -> outdir/name.mp4
   printf '%s/%s.mp4' "${outdir:-$(dirname "$img")}" "$name"
 }
 
+# _smooth_reencode OUT — re-encode the finished loop in ONE continuous pass so
+# there is no per-loop seam.  A concat-copied loop puts a fresh keyframe at every
+# loop point (a one-frame video "pulse") and a fresh AAC frame boundary (a faint
+# audio blip); a continuous encode removes both — the same thing Premiere does.
+# CPU libx264 only: the loop point is a near-match, so libx264 does NOT keyframe
+# there, whereas the GPU (VideoToolbox) does and the pulse survives.  No-op
+# unless --smooth.  This re-encodes the WHOLE file, so it scales with length.
+_smooth_reencode() {
+  local out="$1"
+  [[ "${SMOOTH:-0}" -eq 1 ]] || return 0
+  local crf="${LOOP_CRF:-23}"
+  local tmp; tmp="$(dirname "$out")/.smooth.$$.$(basename "$out")"
+  printf 'note: --smooth — re-encoding the whole loop continuously for a flawless seam (this is the slow step)…\n' >&2
+  if _loop_has_audio "$out"; then
+    "$FFMPEG" -nostdin -loglevel error -y -i "$out" \
+      -c:v libx264 -preset veryfast -crf "$crf" -pix_fmt yuv420p \
+      -c:a aac -b:a 192k -movflags +faststart "$tmp" \
+      && mv -f "$tmp" "$out" || { rm -f "$tmp"; echo "note: --smooth re-encode failed; keeping the fast (concat) loop" >&2; return 1; }
+  else
+    "$FFMPEG" -nostdin -loglevel error -y -i "$out" \
+      -c:v libx264 -preset veryfast -crf "$crf" -an -pix_fmt yuv420p \
+      -movflags +faststart "$tmp" \
+      && mv -f "$tmp" "$out" || { rm -f "$tmp"; echo "note: --smooth re-encode failed; keeping the fast (concat) loop" >&2; return 1; }
+  fi
+}
+
 # _finalize_fades OUT — if --fade was requested, top-and-tail the finished file
 # with a fade up from black / down to black (video + audio), in place.  No-op
 # when FADE is 0.  Re-encodes only the head/tail (see lib/fade.sh).
@@ -297,6 +331,9 @@ OUT_FILE=""                 # explicit output FILE (set when --out names a *.mp4
 MIX_GPU=0                   # 1 = encode mix on Apple Silicon VideoToolbox (--gpu)
 FADE="${FADE:-0}"           # fade-in/out seconds at the file's start AND end (--fade);
                             # env-aware so it reaches batch/manifest child processes
+DETECT_XFADE=0             # 1 = just report the auto-detected audio crossfade and exit (--detect-xfade)
+SMOOTH=0                   # 1 = perfectly-seamless loop: auto audio crossfade + continuous
+                           #     re-encode (no per-loop keyframe pulse / audio boundary). Slower. (--smooth)
 POS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -340,7 +377,9 @@ while [[ $# -gt 0 ]]; do
     --hardcut)     MIX_HARDCUT=1;     shift;;
     --gpu)         MIX_GPU=1;         shift;;
     --fade)        FADE="$2";         shift 2;;
-    -h|--help)  sed -n '2,62p' "$0"; exit 0;;
+    --detect-xfade) DETECT_XFADE=1;   shift;;
+    --smooth)      SMOOTH=1;          shift;;
+    -h|--help)  sed -n '2,68p' "$0"; exit 0;;
     -*)         die "unknown flag: $1";;
     *)          POS+=("$1");          shift;;
   esac
@@ -480,6 +519,21 @@ loop_extend_mode() {
     [[ -e "$AUDIO_PATH" ]] || die "--audio path not found: $AUDIO_PATH"
   fi
 
+  # --smooth: auto-detect how long the audio crossfade needs to be for THIS clip
+  # (based on how much its start/end ambience differ) and raise the crossfade to
+  # at least that.  A longer-than-needed dissolve is harmless on steady ambience,
+  # so we only ever raise, never lower the user's choice.  (Native audio only —
+  # with --audio the soundtrack is built seamlessly already.)
+  if [[ "$SMOOTH" -eq 1 && "$LOOP_STRATEGY" == "crossfade" && -z "$AUDIO_PATH" ]]; then
+    local _det
+    if _det="$(detect_audio_xfade "$clip")" && [[ -n "$_det" ]]; then
+      if awk -v a="$_det" -v b="$LOOP_XFADE" 'BEGIN{ exit !(a > b) }'; then
+        printf 'note: --smooth raised the dissolve to %ss (auto-detected from the clip'\''s sound for a seamless audio loop)\n' "$_det" >&2
+        LOOP_XFADE="$_det"
+      fi
+    fi
+  fi
+
   # Short-clip handling for crossfade: the dissolve needs the clip to be at
   # least 3× the xfade window.  Rather than erroring out on a short clip, clamp
   # the window down to the largest dissolve that fits and tell the operator how
@@ -596,9 +650,10 @@ loop_extend_mode() {
     printf '  estimated output: %s s, ~%s MB\n' "$target_secs" "$est_mb"
     printf '  seam preview clip: %s\n' "$preview_file"
 
-    # Only suggest pingpong when not already using it (avoid confusing tip-on-pingpong)
-    if [[ "$verdict" != "SEAMLESS" && "$LOOP_STRATEGY" != "pingpong" ]]; then
-      printf '  tip: for a truly seamless loop try --loop pingpong (note: it reverses motion on alternate passes)\n'
+    # Only suggest pingpong when not already using it (avoid confusing tip-on-pingpong),
+    # and not under --smooth (the continuous re-encode already removes the seam).
+    if [[ "$verdict" != "SEAMLESS" && "$LOOP_STRATEGY" != "pingpong" && "$SMOOTH" -ne 1 ]]; then
+      printf '  tip: for a truly seamless loop try --loop pingpong (reverses motion), or --smooth (no reversal, but slower)\n'
     fi
   else
     printf '[loop-extend] preview gate: unit too short for seam measurement (skipped)\n'
@@ -713,6 +768,8 @@ loop_extend_mode() {
 
   _cleanup_loop_tmp
 
+  # --smooth: continuous re-encode → no per-loop video pulse or audio boundary.
+  _smooth_reencode "$out" || true
   # Top-and-tail fade (video + audio), in place, if --fade was given.
   _finalize_fades "$out" || true
 
@@ -722,9 +779,10 @@ loop_extend_mode() {
   else
     audio_label="(native)"
   fi
-  printf '✓ %s  (%sh = %ss, loop %s, xfade %ss, audio %s, rendered in %ss)  ->  %s\n' \
+  printf '✓ %s  (%sh = %ss, loop %s, xfade %ss, audio %s%s, rendered in %ss)  ->  %s\n' \
     "$(basename "$clip")" "$hours" "$target_secs" "$LOOP_STRATEGY" "$LOOP_XFADE" \
-    "$audio_label" "$(( SECONDS - _t0 ))" "$out"
+    "$audio_label" "$( [[ "$SMOOTH" -eq 1 ]] && echo ', smooth' || echo '' )" \
+    "$(( SECONDS - _t0 ))" "$out"
 }
 
 # ---------------------------------------------------------------------------
@@ -817,6 +875,17 @@ case "$MODE" in
   # avoiding exported-function fragility. xargs -I{} uses newline as the only
   # delimiter, so spaces in paths (e.g. "/Volumes/1TB SSD/...") are safe.
   single)
+    # --detect-xfade: report the auto-detected audio crossfade for a clip and exit.
+    # (No HOURS needed — it's a read-only analysis of the clip's ambience.)
+    if [[ "$DETECT_XFADE" -eq 1 ]]; then
+      [[ ${#POS[@]} -ge 1 ]] || die "usage: $0 CLIP --detect-xfade"
+      [[ "$(classify_input "${POS[0]}" 2>/dev/null)" == "video" ]] \
+        || die "--detect-xfade needs a video clip: ${POS[0]}"
+      printf 'recommended audio crossfade for %s: %ss\n' \
+        "$(basename "${POS[0]}")" "$(XFADE_AUTO_VERBOSE=1 detect_audio_xfade "${POS[0]}")"
+      exit 0
+    fi
+
     [[ ${#POS[@]} -ge 2 ]] || die "usage: $0 FILE HOURS [OUTDIR | --out FILE]"
 
     # Resolve the output path.  Precedence: explicit --out FILE (e.g.

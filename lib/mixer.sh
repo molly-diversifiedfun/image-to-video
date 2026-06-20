@@ -111,7 +111,7 @@ _mix_dissolve() {
        [av][bv]xfade=transition=fade:duration=${x}:offset=0,format=yuv420p[v]; \
        [0:a]atrim=start=${astart}:duration=${x},asetpts=PTS-STARTPTS[aa]; \
        [1:a]atrim=start=0:duration=${x},asetpts=PTS-STARTPTS[ba]; \
-       [aa][ba]acrossfade=d=${x}[a]" \
+       [aa][ba]acrossfade=d=${x}:c1=qsin:c2=qsin[a]" \
     -map "[v]" -map "[a]" $(_mix_enc) -t "$x" "$out"
 }
 

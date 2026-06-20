@@ -401,3 +401,50 @@ _boundary_psnr() {
 
   assert_has_stream "$unit" v
 }
+
+# mean_volume (dB) of a 0.5s window of FILE starting at time START.
+_mean_vol() {
+  "$FFMPEG" -nostdin -hide_banner -ss "$2" -t 0.5 -i "$1" -af volumedetect -f null - 2>&1 \
+    | awk -F'mean_volume:' '/mean_volume/{gsub(/ dB.*/,"",$2); gsub(/ /,"",$2); print $2}'
+}
+
+# ---------------------------------------------------------------------------
+# Test 11: crossfade audio uses a CONSTANT-POWER curve (no volume dip at the
+# loop seam).
+#
+# The audio crossfade overlaps the clip's tail with its head.  A linear
+# (constant-gain / `tri`) crossfade of two UNCORRELATED signals dips ~3 dB at
+# the overlap midpoint — an audible "pump" that sounds like a crossfade rather
+# than a smooth cross-dissolve.  The equal-power `qsin` curve holds loudness
+# constant through the overlap.  Source: steady pink noise so tail/head are
+# uncorrelated (a pure tone would be correlated and wouldn't show the dip).
+#
+# TEETH: with the old `tri` curve this asserts ~3 dB and FAILS; with `qsin`
+# the dip collapses to well under 1.5 dB.
+# ---------------------------------------------------------------------------
+@test "crossfade: audio is constant-power (no volume dip at the loop seam)" {
+  local clip="$WORK_DIR/noise.mp4"
+  local unit="$WORK_DIR/unit_noise.mp4"
+
+  # 12s clip, steady pink noise audio + trivial video.
+  "$FFMPEG" -nostdin -loglevel error -y \
+    -f lavfi -i "color=c=gray:s=160x90:rate=30:d=12" \
+    -f lavfi -i "anoisesrc=d=12:c=pink:a=0.5" \
+    -c:v libx264 -preset ultrafast -pix_fmt yuv420p -c:a aac -shortest "$clip"
+
+  run loop_unit "$clip" "$unit" --loop crossfade --xfade 4
+  [ "$status" -eq 0 ]
+  [ -f "$unit" ]
+
+  # Unit length = 12 − 4 = 8s; the crossfade is its last 4s → midpoint ≈ 6.0s,
+  # baseline taken in the steady body ≈ 2.0s.
+  local base mid dip
+  base="$(_mean_vol "$unit" 2.0)"
+  mid="$(_mean_vol "$unit" 6.0)"
+  [ -n "$base" ] && [ -n "$mid" ]
+  dip="$(awk -v a="$base" -v m="$mid" 'BEGIN{printf "%.2f", a-m}')"
+  echo "baseline=${base}dB midpoint=${mid}dB dip=${dip}dB (linear/tri would be ~3 dB)"
+
+  # |dip| must stay under 1.5 dB — constant power, no audible pump.
+  awk -v d="$dip" 'BEGIN{ exit !(d < 1.5 && d > -1.5) }'
+}

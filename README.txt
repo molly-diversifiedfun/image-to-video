@@ -105,52 +105,70 @@ C)  A FOLDER OF PHOTOS  →  ONE slideshow (photos fade into each other)
 ------------------------------------------------------------------
 D)  A SHORT VIDEO CLIP  →  stretched to hours (seamless loop)
 ------------------------------------------------------------------
-     bash "<make-video>" "<a short clip>" 8 --loop pingpong
+   Takes a short clip (rain, waves, clouds, a drone shot...) and loops
+   it into a long video — 8 hours, 10 hours, whatever — so it can play
+   in the background. The trick is hiding the "loop point" where the
+   end meets the beginning.
 
-   Takes a short clip (a few seconds of waves, clouds, fog, fire...)
-   and loops it into 8 hours so the loop point is invisible.
+   ┌──────────────────────────────────────────────────────────────┐
+   │  JUST WANT IT PERFECT?  COPY THIS, CHANGE 3 THINGS:           │
+   │                                                              │
+   │    bash "<make-video>" "<your clip>" 8 --smooth \            │
+   │         --fade 3 --height 1080 --out "<my-8h-video.mp4>"     │
+   │                                                              │
+   │  Change:  <your clip>  → drag your video file in             │
+   │           8             → how many hours you want            │
+   │           my-8h-video   → what to name the finished file     │
+   │                                                              │
+   │  That's it. --smooth makes the loop seamless (picture AND    │
+   │  sound). Let it run — for 8 hours it can take a while.       │
+   └──────────────────────────────────────────────────────────────┘
 
-   Two ways to loop (this matters — see the next section):
-        --loop pingpong    plays forward then backward. TRULY
-                           invisible join. Best for water, clouds,
-                           fog, smoke, abstract motion. DON'T use it
-                           for rain or anything falling — backward
-                           rain falls UP and looks wrong.
-        --loop crossfade   (default) the end of the clip dissolves
-                           into the beginning right at the loop
-                           point, so it flows continuously with no
-                           rewind and no hard cut. This is the one
-                           to use for RAIN, snow, traffic, a drone
-                           flying forward — anything that can't be
-                           reversed.
+   WHAT --smooth DOES (in plain words)
+   -----------------------------------
+   Without it, the tool stitches copies of your clip together really
+   fast — but that leaves a tiny blink and a faint blip every time it
+   loops. --smooth re-draws the whole video in one smooth pass so the
+   loop point disappears completely, in picture AND sound. It's the
+   same thing a video editor does in Premiere.
 
-   Make the dissolve longer for a softer, smoother handoff:
-        --xfade 5          5-second cross dissolve (default is 1s).
-                           Longer = smoother. The clip must be at
-                           least 3× the fade, so a 5s dissolve needs
-                           a clip of 15 seconds or more. (If your clip
-                           is too short it just uses the longest fade
-                           that fits and tells you — it won't error.)
+   The catch: --smooth has to process the whole length, so it's SLOW
+   (an 8-hour video can take a few hours — leave it running). Without
+   --smooth it's fast but has that tiny blink. For a video you'll
+   actually watch, use --smooth.
 
-   Nice finishing touches for a sleep/rain video:
-        --fade 3           ease in from black at the start and out to
-                           black at the end — picture AND sound.
-        --height 1080      make the file much smaller (good for 8h+).
-        --out rain-8h.mp4  save it with the exact name you want.
+   IT TUNES THE SOUND FOR YOU
+   --------------------------
+   --smooth also LISTENS to your clip and picks how long the sound
+   should blend at the loop, automatically — a few seconds for steady
+   rain, longer if the sound changes a lot from start to end. You
+   don't set anything. (Curious what it picked for a clip? Run:
+        bash "<make-video>" "<your clip>" --detect-xfade   )
 
-   A full example:
-        bash "<make-video>" "<rain clip>" 8 --xfade 5 --fade 3 \
-             --height 1080 --out "<rain-8h.mp4>"
+   THE OTHER KNOBS (all optional)
+   ------------------------------
+        --fade 3       ease in from black at the start and out to
+                       black at the end — picture AND sound. Nice for
+                       sleep/rain videos so it doesn't start abruptly.
+        --height 1080  shrink the picture so the file isn't huge.
+                       Strongly recommended for 8-hour videos.
+        --xfade 6      how long the picture dissolve is, in seconds
+                       (default 1). Longer = softer. --smooth will
+                       never make it shorter than the sound needs.
+        --out NAME.mp4 save it with the exact name you want.
 
-   How long does it take? A looped clip is FAST no matter how long —
-   8 hours renders in about the same time as 1 hour (it copies the
-   clip instead of re-drawing every frame). It prints "rendered in Ns"
-   when done.
+   ONE STYLE CHOICE: which kind of loop?
+   -------------------------------------
+        --loop crossfade  (default) the end DISSOLVES into the start.
+                          Use for RAIN, snow, traffic, a drone flying
+                          forward — anything that can't be reversed.
+        --loop pingpong   plays forward then BACKWARD. The join is
+                          flawless, but everything reverses — so
+                          DON'T use it for rain (the rain falls UP).
+                          Great for water, clouds, fog, fire.
 
-   Before it makes the full file, it shows you a quick PREVIEW of
-   the loop point and says how seamless it looks, so you can stop
-   and switch styles if you don't like it. (Add --yes to skip the
-   preview and just go.)
+   Before the full render it shows a quick PREVIEW of the loop point.
+   Add --yes to skip the preview and just go.
 
 
 ------------------------------------------------------------------
@@ -224,11 +242,17 @@ Examples:
   --mix 4             folder of CLIPS  -> one shuffled mix, this many hours
   --audio "<path>"    add music: a file (loops) or a folder (playlist)
   --keep-native       layer music OVER a clip's own sound (clips only)
+  --smooth            BEST for loops you'll watch: makes the loop point
+                      perfectly seamless in picture AND sound, and auto-
+                      tunes the sound blend for the clip. Slower (re-draws
+                      the whole video), but worth it.
+  --detect-xfade      just TELL me the sound-blend length it would pick
+                      for a clip (doesn't make a video)
   --loop pingpong     clip loop style: invisible (forward+backward)
-  --loop crossfade    clip loop style: soft blend (default)
+  --loop crossfade    clip loop style: soft blend / dissolve (default)
   --order name        mix: keep filename order (default is shuffle)
   --seed 7            slideshow/mix: repeatable random order
-  --xfade 2           length of the fade/crossfade, in seconds
+  --xfade 2           length of the picture dissolve, in seconds
   --fade 3            fade in from black at the start AND out to black at
                       the end (picture and sound). Great for sleep/rain
                       videos so they don't start or stop abruptly.
