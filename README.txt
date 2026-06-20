@@ -63,7 +63,41 @@ real thing in here." Keep the quotation marks.
 
 
 ==================================================================
-  WHAT DO YOU WANT TO MAKE?   (pick one)
+  ★  START HERE  —  THE THING MOST PEOPLE WANT  ★
+  Turn a short clip (rain, waves, a drone shot) into a long,
+  smooth, looping background video.
+==================================================================
+
+   Do it in TWO steps. Don't skip step 1.
+
+   STEP 1 — MAKE A 1-MINUTE TEST FIRST (takes a minute or two):
+
+       bash "<make-video>" "<your clip>" 0.02 --smooth --out "<test.mp4>"
+
+       • Type  bash  and a space.
+       • DRAG the make-video file in.  (it fills in <make-video>)
+       • Type a space, DRAG your video clip in.  (fills <your clip>)
+       • Type the rest exactly:  0.02 --smooth --out "test.mp4"
+       • Press Enter. Wait. Then open test.mp4 and watch the loop.
+
+   STEP 2 — IF THE TEST LOOKS GOOD, MAKE THE REAL ONE:
+
+       bash "<make-video>" "<your clip>" 8 --smooth --height 1080 --out "<final.mp4>"
+
+       Change only:   8        → how many HOURS you want
+                      final    → what to name the finished file
+       Everything else stays the same.
+
+   THAT'S IT. You don't pick fade lengths or fix the loop — --smooth
+   does all of it for you (picture AND sound). The only trade-off:
+   --smooth is SLOW on long videos (an 8-hour one can take hours, so
+   start it and walk away). Keep the Mac awake while it runs.
+
+   (Want more control or other kinds of videos? Read the menu below.)
+
+
+==================================================================
+  WHAT DO YOU WANT TO MAKE?   (the full menu)
 ==================================================================
 
 ------------------------------------------------------------------
@@ -302,9 +336,22 @@ Examples:
    In mix mode, one of your clips is shorter than the crossfade. Use
    a smaller fade, e.g.  --xfade 0.5 , or remove the tiny clip.
 
+"not enough free disk"
+   A long --smooth video can be big (an 8-hour 1080p one is ~20 GB).
+   The tool checks first and stops if it won't fit. Free up space on
+   your Mac, OR make the file smaller by adding  --height 1080  (or a
+   smaller number), OR  --crf 26  (higher number = smaller file).
+
+"too short for a 6s dissolve" (it keeps going anyway)
+   That's not an error. Your clip is shorter than 3× the fade, so the
+   tool just used the longest fade that fits and told you. Nothing to
+   do — or use a longer clip if you want a longer fade.
+
 It looks frozen / nothing is happening
-   Big videos take time, especially --mix and --zoom. Mixing shows
-   progress and asks before the long part. Let it run.
+   Big videos take time, especially --smooth, --mix and --zoom. The
+   "--smooth ... (this is the slow step)" line means it's working —
+   it can run for hours on a long video. Let it run; keep the Mac
+   awake and plugged in. (You can watch the file grow in Finder.)
 
 The order keeps changing every time
    That's the shuffle. For the SAME order every time, add a seed,
