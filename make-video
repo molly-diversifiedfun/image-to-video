@@ -43,10 +43,13 @@
 #   go/no-go before the full render. --hardcut skips crossfades (fast fallback).
 #
 # Output, quality & polish (all modes unless noted):
-#     --smooth       (loop-extend) make the loop point PERFECTLY seamless in
-#                    picture AND sound: auto-tunes the audio dissolve to the clip
-#                    and re-encodes the whole loop continuously (no per-loop blink
-#                    or blip). Slower — scales with length — but the best result.
+#     (loop-extend is PERFECTLY SEAMLESS by default: a 5s video dissolve, the
+#      audio crossfade auto-tuned to the clip, and the whole loop re-encoded in
+#      one pass so there is no per-loop blink or blip.  Slower on long videos.)
+#     --fast         (loop-extend) skip the seamless pass — fast concat-copy with
+#                    a faint per-loop seam.  Good for quick drafts.
+#     --xfade S      video dissolve length (loops default 5s; auto-clamped on
+#                    clips shorter than 3×S; the audio blend is auto-tuned).
 #     --detect-xfade (loop-extend) just print the audio-dissolve length the tool
 #                    would auto-pick for a clip, then exit.  No render.
 #     --out FILE     write exactly to FILE (e.g. --out rain-8h.mp4). Works in
@@ -283,7 +286,8 @@ _finalize_fades() {
 
 MODE="single" DIR="" MANIFEST="" OUTDIR="" JOBS="" HOURS=""
 LOOP_STRATEGY="crossfade"   # loop-extend: crossfade|pingpong|native
-LOOP_XFADE="1.0"            # loop-extend: xfade window in seconds
+LOOP_XFADE="5.0"            # loop-extend: video dissolve seconds (default 5; --xfade overrides;
+                            #              auto-clamped down on clips shorter than 3× it)
 LOOP_YES=0                  # loop-extend: 1 = skip interactive prompt
 KEEP_NATIVE=0               # loop-extend + --audio: 0 = replace native audio (default);
                             #                        1 = layer music over native (--keep-native)
@@ -306,8 +310,10 @@ MIX_GPU=0                   # 1 = encode mix on Apple Silicon VideoToolbox (--gp
 FADE="${FADE:-0}"           # fade-in/out seconds at the file's start AND end (--fade);
                             # env-aware so it reaches batch/manifest child processes
 DETECT_XFADE=0             # 1 = just report the auto-detected audio crossfade and exit (--detect-xfade)
-SMOOTH=0                   # 1 = perfectly-seamless loop: auto audio crossfade + continuous
-                           #     re-encode (no per-loop keyframe pulse / audio boundary). Slower. (--smooth)
+SMOOTH=1                   # loop-extend: perfectly-seamless loop is ON BY DEFAULT — auto audio
+                           # crossfade + continuous re-encode (no per-loop keyframe pulse / audio
+                           # boundary). Slower (scales with length). --fast turns it off (fast
+                           # concat-copy with a faint per-loop seam). --smooth kept as a no-op alias.
 POS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -352,8 +358,9 @@ while [[ $# -gt 0 ]]; do
     --gpu)         MIX_GPU=1;         shift;;
     --fade)        FADE="$2";         shift 2;;
     --detect-xfade) DETECT_XFADE=1;   shift;;
-    --smooth)      SMOOTH=1;          shift;;
-    -h|--help)  sed -n '2,68p' "$0"; exit 0;;
+    --smooth)      SMOOTH=1;          shift;;   # no-op alias (smooth is the default now)
+    --fast)        SMOOTH=0;          shift;;   # opt out of smooth: fast concat-copy, faint seam
+    -h|--help)  sed -n '2,71p' "$0"; exit 0;;
     -*)         die "unknown flag: $1";;
     *)          POS+=("$1");          shift;;
   esac

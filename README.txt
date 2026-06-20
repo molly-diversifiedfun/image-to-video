@@ -72,27 +72,34 @@ real thing in here." Keep the quotation marks.
 
    STEP 1 — MAKE A 1-MINUTE TEST FIRST (takes a minute or two):
 
-       bash "<make-video>" "<your clip>" 0.02 --smooth --out "<test.mp4>"
+       bash "<make-video>" "<your clip>" 0.02 --out "<test.mp4>"
 
        • Type  bash  and a space.
        • DRAG the make-video file in.  (it fills in <make-video>)
        • Type a space, DRAG your video clip in.  (fills <your clip>)
-       • Type the rest exactly:  0.02 --smooth --out "test.mp4"
+       • Type the rest exactly:  0.02 --out "test.mp4"
        • Press Enter. Wait. Then open test.mp4 and watch the loop.
 
    STEP 2 — IF THE TEST LOOKS GOOD, MAKE THE REAL ONE:
 
-       bash "<make-video>" "<your clip>" 8 --smooth --height 1080 --out "<final.mp4>"
+       bash "<make-video>" "<your clip>" 8 --height 1080 --out "<final.mp4>"
 
        Change only:   8        → how many HOURS you want
                       final    → what to name the finished file
        Everything else stays the same.
 
-   THAT'S IT. You don't pick fade lengths or fix the loop — --smooth
-   does all of it for you (picture AND sound). The only trade-off:
-   --smooth is SLOW on long videos (an 8-hour one can take hours, so
-   start it and walk away). Keep the Mac awake while it runs.
+   THAT'S IT — you don't add anything. The loop is made perfectly
+   SEAMLESS for you automatically: a smooth 5-second dissolve at the
+   loop, and the SOUND is auto-blended to match (it listens to your
+   clip and picks the right amount). Picture and sound, handled.
 
+   Two things to know:
+     • It's SLOW on long videos (an 8-hour one can take a few hours).
+       Start it and walk away. Keep the Mac awake while it runs.
+     • In a hurry and don't mind a tiny blink at the loop? Add  --fast
+       — it skips the slow step (fine for quick drafts).
+
+   Want a different dissolve length? Add  --xfade 8  (8 seconds), etc.
    (Want more control or other kinds of videos? Read the menu below.)
 
 
@@ -145,38 +152,38 @@ D)  A SHORT VIDEO CLIP  →  stretched to hours (seamless loop)
    end meets the beginning.
 
    ┌──────────────────────────────────────────────────────────────┐
-   │  JUST WANT IT PERFECT?  COPY THIS, CHANGE 3 THINGS:           │
+   │  COPY THIS, CHANGE 3 THINGS:                                  │
    │                                                              │
-   │    bash "<make-video>" "<your clip>" 8 --smooth \            │
+   │    bash "<make-video>" "<your clip>" 8 \                     │
    │         --fade 3 --height 1080 --out "<my-8h-video.mp4>"     │
    │                                                              │
    │  Change:  <your clip>  → drag your video file in             │
    │           8             → how many hours you want            │
    │           my-8h-video   → what to name the finished file     │
    │                                                              │
-   │  That's it. --smooth makes the loop seamless (picture AND    │
-   │  sound). Let it run — for 8 hours it can take a while.       │
+   │  That's it. The loop is made seamless automatically          │
+   │  (picture AND sound). Let it run — for 8 hours it takes a    │
+   │  while.                                                      │
    └──────────────────────────────────────────────────────────────┘
 
-   WHAT --smooth DOES (in plain words)
-   -----------------------------------
-   Without it, the tool stitches copies of your clip together really
-   fast — but that leaves a tiny blink and a faint blip every time it
-   loops. --smooth re-draws the whole video in one smooth pass so the
-   loop point disappears completely, in picture AND sound. It's the
-   same thing a video editor does in Premiere.
+   WHAT "SEAMLESS" MEANS HERE (it's automatic)
+   -------------------------------------------
+   By default the tool re-draws the whole video in one smooth pass so
+   the loop point disappears completely, in picture AND sound — the
+   same thing a video editor does in Premiere. You don't turn it on;
+   it's just how looping works now.
 
-   The catch: --smooth has to process the whole length, so it's SLOW
-   (an 8-hour video can take a few hours — leave it running). Without
-   --smooth it's fast but has that tiny blink. For a video you'll
-   actually watch, use --smooth.
+   The catch: that smooth pass processes the whole length, so it's SLOW
+   (an 8-hour video can take a few hours — leave it running).
+   IN A HURRY?  Add  --fast  to skip the smooth pass. It's quick but
+   leaves a tiny blink/blip at the loop — fine for rough drafts.
 
    IT TUNES THE SOUND FOR YOU
    --------------------------
-   --smooth also LISTENS to your clip and picks how long the sound
-   should blend at the loop, automatically — a few seconds for steady
-   rain, longer if the sound changes a lot from start to end. You
-   don't set anything. (Curious what it picked for a clip? Run:
+   It also LISTENS to your clip and picks how long the sound should
+   blend at the loop, automatically — a few seconds for steady rain,
+   longer if the sound changes a lot from start to end. You don't set
+   anything. (Curious what it picked? Run:
         bash "<make-video>" "<your clip>" --detect-xfade   )
 
    THE OTHER KNOBS (all optional)
@@ -186,9 +193,10 @@ D)  A SHORT VIDEO CLIP  →  stretched to hours (seamless loop)
                        sleep/rain videos so it doesn't start abruptly.
         --height 1080  shrink the picture so the file isn't huge.
                        Strongly recommended for 8-hour videos.
-        --xfade 6      how long the picture dissolve is, in seconds
-                       (default 1). Longer = softer. --smooth will
-                       never make it shorter than the sound needs.
+        --xfade 8      how long the picture dissolve is, in seconds
+                       (default 5). Longer = softer. The sound blend
+                       is auto-tuned and never shorter than it needs.
+        --fast         skip the slow smooth pass (quick, tiny blink).
         --out NAME.mp4 save it with the exact name you want.
 
    ONE STYLE CHOICE: which kind of loop?
@@ -276,17 +284,18 @@ Examples:
   --mix 4             folder of CLIPS  -> one shuffled mix, this many hours
   --audio "<path>"    add music: a file (loops) or a folder (playlist)
   --keep-native       layer music OVER a clip's own sound (clips only)
-  --smooth            BEST for loops you'll watch: makes the loop point
-                      perfectly seamless in picture AND sound, and auto-
-                      tunes the sound blend for the clip. Slower (re-draws
-                      the whole video), but worth it.
+  (loops are made perfectly seamless AUTOMATICALLY — picture AND sound,
+   with a 5-second dissolve and the sound blend auto-tuned per clip.)
+  --fast              skip the slow seamless pass on a loop (quick, but
+                      leaves a tiny blink/blip at the loop point)
   --detect-xfade      just TELL me the sound-blend length it would pick
                       for a clip (doesn't make a video)
   --loop pingpong     clip loop style: invisible (forward+backward)
   --loop crossfade    clip loop style: soft blend / dissolve (default)
   --order name        mix: keep filename order (default is shuffle)
   --seed 7            slideshow/mix: repeatable random order
-  --xfade 2           length of the picture dissolve, in seconds
+  --xfade 8           length of the picture dissolve, in seconds (loops
+                      default to 5)
   --fade 3            fade in from black at the start AND out to black at
                       the end (picture and sound). Great for sleep/rain
                       videos so they don't start or stop abruptly.

@@ -455,29 +455,30 @@ _seam_peak() {
 }
 
 # ---------------------------------------------------------------------------
-# Test 18 — --smooth reduces the loop seam (continuous re-encode removes the
-# per-loop keyframe pulse).  TEETH: the smooth seam peak must be lower than the
-# default concat-copy seam peak at the same boundary.  Silent source + xfade 3
-# so the auto-detect floor (min 3s) does NOT shift the unit length.
+# Test 18 — the DEFAULT (smooth) loop seam is smaller than --fast (concat-copy).
+# Smooth is on by default now; --fast opts out to the fast concat-copy path that
+# leaves the per-loop keyframe pulse.  TEETH: the default seam peak must be lower
+# than the --fast seam peak at the same boundary.  Silent source + xfade 3 so the
+# auto-detect floor (min 3s) does NOT shift the unit length.
 # ---------------------------------------------------------------------------
-@test "loop-extend --smooth: loop seam is smaller than the default concat-copy" {
+@test "loop-extend: default (smooth) loop seam is smaller than --fast (concat-copy)" {
   local clip="$WORK_DIR/m.mp4"
   # 12s with real motion, NO audio (so the auto-detect floor = min 3s = our xfade).
   "$FFMPEG" -nostdin -loglevel error -y -f lavfi -i "testsrc=s=320x180:r=30:d=12" \
     -c:v libx264 -preset veryfast -crf 20 -an -r 30 "$clip"
 
-  run "$REPO_ROOT/make-video" "$clip" 0.0083 --xfade 3 --yes --out "$WORK_DIR/plain.mp4"
+  run "$REPO_ROOT/make-video" "$clip" 0.0083 --xfade 3 --fast --yes --out "$WORK_DIR/fast.mp4"
   [ "$status" -eq 0 ]
-  run "$REPO_ROOT/make-video" "$clip" 0.0083 --xfade 3 --smooth --yes --out "$WORK_DIR/smooth.mp4"
+  run "$REPO_ROOT/make-video" "$clip" 0.0083 --xfade 3 --yes --out "$WORK_DIR/smooth.mp4"
   [ "$status" -eq 0 ]
-  echo "$output" | grep -qi "smooth"   # success line marks it
+  echo "$output" | grep -qi "smooth"   # default success line marks it smooth
 
   # Unit length = 12 - 3 = 9s → first seam at ~9s. Measure the boundary peak.
-  local p s
-  p="$(_seam_peak "$WORK_DIR/plain.mp4" 8.75)"
+  local f s
+  f="$(_seam_peak "$WORK_DIR/fast.mp4" 8.75)"
   s="$(_seam_peak "$WORK_DIR/smooth.mp4" 8.75)"
-  echo "default seam peak=$p  smooth seam peak=$s"
-  awk -v a="$s" -v b="$p" 'BEGIN{ exit !(a < b) }'
+  echo "--fast seam peak=$f  default(smooth) seam peak=$s"
+  awk -v a="$s" -v b="$f" 'BEGIN{ exit !(a < b) }'
 }
 
 # ---------------------------------------------------------------------------
